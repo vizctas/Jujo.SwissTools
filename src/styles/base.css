@@ -1,0 +1,105 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3 {
+  font-size: inherit;
+  font-weight: 600;
+  line-height: var(--leading-tight);
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+/* El foco de teclado no debe recortarse dentro de paneles con scroll. */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+::placeholder {
+  color: var(--muted); /* 4.5:1, no el gris claro por defecto */
+  opacity: 1;
+}
+
+::selection {
+  background: var(--primary-soft-strong);
+  color: var(--ink);
+}
+
+svg {
+  display: block;
+  flex: none;
+}
+
+/* Barras de scroll: se dejan las nativas por decisión de DESIGN.md
+   (no reinventar afordancias estándar). Solo se ajusta el color base. */
+* {
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Valores editables: mono con cifras tabulares.
+   The Tabular Values Rule — un número que salta de ancho al arrastrar es un defecto. */
+.value,
+input.value {
+  font-family: var(--font-value);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}

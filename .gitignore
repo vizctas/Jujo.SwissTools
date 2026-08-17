@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dev-dist/
+*.tsbuildinfo
+
+# Documentos internos: público el código, privado el posicionamiento.
+PRODUCT.md
+DESIGN.md
+
+# Configuración local de herramientas
+.claude/
+.impeccable/
+
+.DS_Store
+*.local
+.env
+.env.*

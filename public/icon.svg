@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="14" fill="#2b4a80" />
+  <g fill="#ffffff">
+    <path fill-rule="evenodd" d="M12 12h18v18H12zm4.5 4.5v9h9v-9z" />
+    <path fill-rule="evenodd" d="M34 12h18v18H34zm4.5 4.5v9h9v-9z" />
+    <path fill-rule="evenodd" d="M12 34h18v18H12zm4.5 4.5v9h9v-9z" />
+    <rect x="19.5" y="19.5" width="3" height="3" rx="0.8" />
+    <rect x="41.5" y="19.5" width="3" height="3" rx="0.8" />
+    <rect x="19.5" y="41.5" width="3" height="3" rx="0.8" />
+    <path d="M34 34h7.5a2.5 2.5 0 0 1 2.5 2.5V44h-4.5v-5.5H34z" />
+    <rect x="47.5" y="34" width="4.5" height="4.5" rx="1.2" />
+    <rect x="47.5" y="42" width="4.5" height="4.5" rx="1.2" />
+    <rect x="39.5" y="47.5" width="4.5" height="4.5" rx="1.2" />
+    <rect x="47.5" y="49.5" width="4.5" height="2.5" rx="1.2" />
+    <rect x="34" y="47.5" width="2.5" height="4.5" rx="1.2" />
+  </g>
+</svg>

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <meta
+      name="description"
+      content="Navaja suiza de herramientas. Generador de QR con control de diseño real: formas, color, logo y texto. Todo local, sin cuenta."
+    />
+    <title>Jujo.SwissTools</title>
+    <script>
+      // El tema se aplica antes del primer pintado para que no haya destello.
+      try {
+        const stored = localStorage.getItem('jujo.theme');
+        if (stored === 'light' || stored === 'dark') {
+          document.documentElement.dataset.theme = stored;
+        }
+      } catch {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
