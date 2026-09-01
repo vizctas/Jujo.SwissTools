@@ -1,71 +1,49 @@
 /*
  * La navaja.
  *
- * Ctrl/Cmd+K abre una sola lista buscable con las cuatro cosas que se navegan:
- * herramientas, presets, historial y acciones. Es la alternativa a gastar una
- * columna permanente de cromo en algo que se usa una vez por sesión.
+ * Ctrl/Cmd+K abre una sola lista buscable. El shell aporta las herramientas y el
+ * tema; todo lo demás lo aportan las propias herramientas vía `useCommands`.
+ * Este archivo no sabe qué es un preset ni qué es un dispositivo, y esa ignorancia
+ * es lo que permite añadir hojas a la navaja sin volver a tocarlo.
  *
  * Es un <dialog> nativo: atrapa el foco, cierra con Escape y pinta su propio
- * backdrop sin reimplementar nada de eso. Las flechas mueven el foco de verdad,
- * así que Enter es el Enter del navegador y no hay estado "activo" paralelo que
- * pueda desincronizarse de lo que un lector de pantalla anuncia.
+ * backdrop. Las flechas mueven el foco de verdad, así que Enter es el Enter del
+ * navegador y no hay estado "activo" paralelo que pueda desincronizarse de lo que
+ * un lector de pantalla anuncia.
  */
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { contentType } from '../lib/content.ts';
-import type { ThemeChoice } from '../lib/storage.ts';
-import { useStore } from '../state/store.tsx';
 import {
-  GridIcon,
-  HistoryIcon,
-  MonitorIcon,
-  MoonIcon,
-  SaveIcon,
-  SearchIcon,
-  SunIcon,
-  TrashIcon,
-} from './Icons.tsx';
-
-interface Command {
-  id: string;
-  group: string;
-  label: string;
-  hint?: string;
-  icon: ReactNode;
-  /** Marca el estado actual: herramienta abierta, preset aplicado, tema activo. */
-  current?: boolean;
-  /** Acción destructiva secundaria, como borrar un preset. */
-  remove?: { label: string; run: () => void };
-  run: () => void;
-}
-
-const RELATIVE = new Intl.RelativeTimeFormat('es', { numeric: 'auto' });
-
-function relativeTime(timestamp: number): string {
-  const minutes = Math.round((timestamp - Date.now()) / 60_000);
-  if (Math.abs(minutes) < 60) return RELATIVE.format(minutes, 'minute');
-  const hours = Math.round(minutes / 60);
-  if (Math.abs(hours) < 24) return RELATIVE.format(hours, 'hour');
-  return RELATIVE.format(Math.round(hours / 24), 'day');
-}
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
+import type { ThemeChoice } from '../lib/storage.ts';
+import { TOOLS } from '../tools/registry.ts';
+import type { PaletteCommand } from '../tools/types.ts';
+import { MonitorIcon, MoonIcon, SearchIcon, SunIcon, TrashIcon } from './Icons.tsx';
 
 export function CommandPalette({
   open,
   onClose,
   theme,
   onTheme,
+  activeToolId,
+  onActivateTool,
 }: {
   open: boolean;
   onClose: () => void;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
+  activeToolId: string;
+  onActivateTool: (id: string) => void;
 }): ReactNode {
-  const { state, dispatch, presets, history, savePreset, deletePreset, clearAllHistory } =
-    useStore();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState('');
-  const [naming, setNaming] = useState(false);
+  const [prompting, setPrompting] = useState<PaletteCommand | null>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -77,150 +55,74 @@ export function CommandPalette({
   useEffect(() => {
     if (!open) {
       setQuery('');
-      setNaming(false);
+      setPrompting(null);
     }
   }, [open]);
 
-  const commands = useMemo<Command[]>(() => {
-    const list: Command[] = [
-      {
-        id: 'tool-qr',
-        group: 'Herramientas',
-        label: 'Generador de QR',
-        hint: 'La única hoja abierta por ahora.',
-        icon: <GridIcon />,
-        current: true,
-        run: onClose,
-      },
-      {
-        id: 'preset-save',
-        group: 'Presets',
-        label: 'Guardar el diseño actual como preset',
-        hint: 'Colores, formas, logo y tipografía, listos para reaplicar.',
-        icon: <SaveIcon />,
-        run: () => {
-          setNaming(true);
-          setQuery('');
-        },
-      },
-      ...presets.map<Command>((preset) => ({
-        id: `preset-${preset.id}`,
-        group: 'Presets',
-        label: preset.name,
-        hint: 'Aplica este diseño al contenido actual.',
-        icon: <SaveIcon />,
-        current: preset.id === state.activePresetId,
-        remove: {
-          label: `Borrar el preset ${preset.name}`,
-          run: () => void deletePreset(preset.id),
-        },
-        run: () => {
-          dispatch({ type: 'apply-preset', preset });
-          onClose();
-        },
-      })),
-      ...history.map<Command>((entry) => ({
-        id: `history-${entry.id}`,
-        group: 'Historial',
-        label: entry.label,
-        hint: `${contentType(entry.typeId).label} · ${relativeTime(entry.createdAt)}`,
-        icon: <HistoryIcon />,
-        run: () => {
-          dispatch({ type: 'load-entry', entry });
-          onClose();
-        },
-      })),
-      {
-        id: 'action-reset',
-        group: 'Acciones',
-        label: 'Restablecer el diseño',
-        hint: 'Vuelve a los valores de fábrica. El contenido no se toca.',
-        icon: <GridIcon />,
-        run: () => {
-          dispatch({ type: 'reset-design' });
-          onClose();
-        },
-      },
-      {
-        id: 'action-theme-light',
-        group: 'Acciones',
-        label: 'Tema claro',
-        icon: <SunIcon />,
-        current: theme === 'light',
-        run: () => {
-          onTheme('light');
-          onClose();
-        },
-      },
-      {
-        id: 'action-theme-dark',
-        group: 'Acciones',
-        label: 'Tema oscuro',
-        icon: <MoonIcon />,
-        current: theme === 'dark',
-        run: () => {
-          onTheme('dark');
-          onClose();
-        },
-      },
-      {
-        id: 'action-theme-system',
-        group: 'Acciones',
-        label: 'Tema del sistema',
-        icon: <MonitorIcon />,
-        current: theme === 'system',
-        run: () => {
-          onTheme('system');
-          onClose();
-        },
-      },
-    ];
+  // Bucle sobre un array estático: el orden de los hooks nunca cambia.
+  const contributed = TOOLS.map((tool) =>
+    tool.useCommands({
+      close: onClose,
+      activate: () => onActivateTool(tool.id),
+      isActive: tool.id === activeToolId,
+    }),
+  ).flat();
 
-    if (history.length > 0) {
-      list.push({
-        id: 'action-clear-history',
-        group: 'Acciones',
-        label: 'Vaciar el historial',
-        hint: `${history.length} piezas guardadas en este dispositivo.`,
-        icon: <TrashIcon />,
-        run: () => {
-          void clearAllHistory();
-          onClose();
-        },
-      });
-    }
+  const toolCommands = TOOLS.map<PaletteCommand>((tool) => ({
+    id: `tool-${tool.id}`,
+    group: 'Herramientas',
+    label: tool.label,
+    hint: tool.blurb,
+    icon: tool.icon,
+    current: tool.id === activeToolId,
+    run: () => {
+      onActivateTool(tool.id);
+      onClose();
+    },
+  }));
 
-    return list;
-  }, [
-    presets,
-    history,
-    state.activePresetId,
-    theme,
-    dispatch,
-    onClose,
-    onTheme,
-    clearAllHistory,
-    deletePreset,
-  ]);
+  const themeCommands: PaletteCommand[] = [
+    { id: 'theme-light', label: 'Tema claro', icon: <SunIcon />, choice: 'light' as const },
+    { id: 'theme-dark', label: 'Tema oscuro', icon: <MoonIcon />, choice: 'dark' as const },
+    {
+      id: 'theme-system',
+      label: 'Tema del sistema',
+      icon: <MonitorIcon />,
+      choice: 'system' as const,
+    },
+  ].map(({ id, label, icon, choice }) => ({
+    id,
+    group: 'Apariencia',
+    label,
+    icon,
+    current: theme === choice,
+    run: () => {
+      onTheme(choice);
+      onClose();
+    },
+  }));
+
+  const commands = [...toolCommands, ...contributed, ...themeCommands];
 
   const grouped = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const filtered =
-      naming || needle === ''
+      prompting || needle === ''
         ? commands
         : commands.filter((command) =>
             `${command.label} ${command.hint ?? ''} ${command.group}`
               .toLowerCase()
               .includes(needle),
           );
-    const map = new Map<string, Command[]>();
+    const map = new Map<string, PaletteCommand[]>();
     for (const command of filtered) {
       const bucket = map.get(command.group);
       if (bucket) bucket.push(command);
       else map.set(command.group, [command]);
     }
     return [...map.entries()];
-  }, [commands, query, naming]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commands, query, prompting]);
 
   const total = grouped.reduce((count, [, items]) => count + items.length, 0);
 
@@ -236,7 +138,7 @@ export function CommandPalette({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (naming) return;
+    if (prompting) return;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       moveFocus(1);
@@ -247,17 +149,27 @@ export function CommandPalette({
     }
   };
 
+  const activate = (command: PaletteCommand): void => {
+    if (command.prompt) {
+      setPrompting(command);
+      setQuery('');
+      return;
+    }
+    command.run?.();
+  };
+
   return (
     <dialog
       className="palette"
       ref={dialogRef}
-      aria-label="Navaja: herramientas, presets, historial y acciones"
+      aria-label="Navaja: herramientas, acciones e historial"
       onClose={onClose}
       onCancel={(event) => {
-        // En modo "nombrar preset", Escape vuelve a la búsqueda antes de cerrar.
-        if (naming) {
+        // En modo pregunta, Escape vuelve a la búsqueda antes de cerrar.
+        if (prompting) {
           event.preventDefault();
-          setNaming(false);
+          setPrompting(null);
+          setQuery('');
         }
       }}
       onClick={(event) => {
@@ -265,23 +177,22 @@ export function CommandPalette({
       }}
     >
       <div className="palette-inner" onKeyDown={onKeyDown}>
-        {naming ? (
+        {prompting ? (
           <form
             className="palette-search"
             onSubmit={(event) => {
               event.preventDefault();
-              const name = query.trim();
-              if (name === '') return;
-              void savePreset(name);
-              onClose();
+              const value = query.trim();
+              if (value === '') return;
+              prompting.prompt?.run(value);
             }}
           >
-            <SaveIcon />
+            {prompting.icon}
             <input
               autoFocus
               value={query}
-              placeholder="Nombre del preset, por ejemplo «Cliente Marca Roja»"
-              aria-label="Nombre del preset"
+              placeholder={prompting.prompt?.placeholder}
+              aria-label={prompting.label}
               onChange={(event) => setQuery(event.target.value)}
             />
             <kbd>Enter</kbd>
@@ -292,7 +203,7 @@ export function CommandPalette({
             <input
               autoFocus
               value={query}
-              placeholder="Busca una herramienta, un preset o una acción"
+              placeholder="Busca una herramienta, una acción o algo del historial"
               aria-label="Buscar en la navaja"
               onChange={(event) => setQuery(event.target.value)}
             />
@@ -300,15 +211,12 @@ export function CommandPalette({
           </div>
         )}
 
-        {naming ? (
-          <p className="palette-empty">
-            El preset guarda todo el diseño: formas, colores, logo y tipografía. El
-            contenido no entra, para que puedas aplicarlo a cualquier código.
-          </p>
+        {prompting ? (
+          <p className="palette-empty">{prompting.prompt?.hint}</p>
         ) : total === 0 ? (
           <p className="palette-empty">
-            Nada coincide con «{query}». Prueba con el nombre de un preset o de una
-            acción.
+            Nada coincide con «{query}». Prueba con el nombre de una herramienta o de
+            una acción.
           </p>
         ) : (
           <div className="palette-list" ref={listRef}>
@@ -317,7 +225,12 @@ export function CommandPalette({
                 <p className="palette-group-title">{group}</p>
                 {items.map((command) => (
                   <div className="palette-row" key={command.id}>
-                    <button type="button" className="palette-item" data-command onClick={command.run}>
+                    <button
+                      type="button"
+                      className="palette-item"
+                      data-command
+                      onClick={() => activate(command)}
+                    >
                       <span className="palette-icon">{command.icon}</span>
                       <span className="palette-text">
                         <span className="palette-label">{command.label}</span>
@@ -344,13 +257,6 @@ export function CommandPalette({
             ))}
           </div>
         )}
-
-        {!naming && presets.length === 0 ? (
-          <p className="palette-foot">
-            Todavía no hay presets. Guarda un diseño cuando tengas resuelta la marca de
-            un cliente y reaplícalo a cualquier código con dos teclas.
-          </p>
-        ) : null}
       </div>
     </dialog>
   );

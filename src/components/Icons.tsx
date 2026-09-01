@@ -141,3 +141,47 @@ export const CloseIcon = (props: IconProps): ReactNode => (
     <path d="M4 4l8 8M12 4l-8 8" />
   </Icon>
 );
+
+export const PhoneIcon = (props: IconProps): ReactNode => (
+  <Icon {...props}>
+    <rect x="4.2" y="1.8" width="7.6" height="12.4" rx="1.4" />
+    <path d="M7.2 12.2h1.6" />
+  </Icon>
+);
+
+export const WirelessIcon = (props: IconProps): ReactNode => (
+  <Icon {...props}>
+    <path d="M2.4 6.2a8 8 0 0 1 11.2 0" />
+    <path d="M4.7 8.7a4.8 4.8 0 0 1 6.6 0" />
+    <path d="M8 11.9h.01" />
+  </Icon>
+);
+
+export const PackageIcon = (props: IconProps): ReactNode => (
+  <Icon {...props}>
+    <path d="M8 1.9 14 5v6l-6 3.1L2 11V5z" />
+    <path d="M2 5l6 3.1L14 5" />
+    <path d="M8 8.1v6" />
+  </Icon>
+);
+
+export const RefreshIcon = (props: IconProps): ReactNode => (
+  <Icon {...props}>
+    <path d="M13.4 8a5.4 5.4 0 1 1-1.6-3.8" />
+    <path d="M13.6 2.4v3.2h-3.2" />
+  </Icon>
+);
+
+export const StopIcon = (props: IconProps): ReactNode => (
+  <Icon {...props}>
+    <rect x="4" y="4" width="8" height="8" rx="1.2" />
+  </Icon>
+);
+
+export const PlugIcon = (props: IconProps): ReactNode => (
+  <Icon {...props}>
+    <path d="M6 1.8v3.4M10 1.8v3.4" />
+    <path d="M3.8 5.2h8.4v2.2a4.2 4.2 0 0 1-8.4 0z" />
+    <path d="M8 11.6v2.6" />
+  </Icon>
+);
