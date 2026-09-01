@@ -73,6 +73,10 @@ function adbBridge(): Plugin {
 }
 
 export default defineConfig({
+  // El worker del recortador importa la librería de modelos de forma diferida, y eso
+  // obliga a dividir el código. El formato `iife` que Vite usa por defecto para
+  // workers no lo admite, así que se empaqueta como módulo ES.
+  worker: { format: 'es' },
   plugins: [
     adbBridge(),
     react(),
@@ -82,7 +86,7 @@ export default defineConfig({
       manifest: {
         name: 'Jujo.SwissTools',
         short_name: 'SwissTools',
-        description: 'Navaja suiza de herramientas. QR e instalación remota de APK.',
+        description: 'Navaja suiza de herramientas. QR, instalación de APK, captura de media y recorte de fondo.',
         lang: 'es',
         start_url: '/',
         display: 'standalone',

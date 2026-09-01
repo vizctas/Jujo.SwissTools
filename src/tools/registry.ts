@@ -1,4 +1,5 @@
 import { apkTool } from './apk/index.tsx';
+import { bgTool } from './bg/index.tsx';
 import { qrTool } from './qr/index.tsx';
 import { snifferTool } from './sniffer/index.tsx';
 import type { PaletteCommand, ToolCommandContext, ToolDefinition } from './types.ts';
@@ -14,7 +15,7 @@ const NO_COMMANDS = (): PaletteCommand[] => [];
  */
 export const TOOLS: ReadonlyArray<
   ToolDefinition & { useCommands: (context: ToolCommandContext) => PaletteCommand[] }
-> = [qrTool, apkTool, snifferTool].map((tool) => ({
+> = [qrTool, apkTool, snifferTool, bgTool].map((tool) => ({
   ...tool,
   useCommands: tool.useCommands ?? NO_COMMANDS,
 }));

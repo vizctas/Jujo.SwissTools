@@ -13,6 +13,7 @@
     "@fontsource-variable/inter": "^5.2.5",
     "@fontsource-variable/jetbrains-mono": "^5.2.5",
     "@fontsource/instrument-serif": "^5.2.5",
+    "@huggingface/transformers": "^4.2.0",
     "idb-keyval": "^6.2.2",
     "qrcode": "^1.5.4",
     "react": "^19.1.0",
