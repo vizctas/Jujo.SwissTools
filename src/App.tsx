@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { BridgeProvider } from './bridge/provider.tsx';
 import { CommandPalette } from './components/CommandPalette.tsx';
 import { MonitorIcon, MoonIcon, SunIcon } from './components/Icons.tsx';
 import { loadTheme, saveTheme, type ThemeChoice } from './lib/storage.ts';
@@ -147,8 +148,10 @@ function Shell(): ReactNode {
 
 export function App(): ReactNode {
   return (
-    <ToolProviders>
-      <Shell />
-    </ToolProviders>
+    <BridgeProvider>
+      <ToolProviders>
+        <Shell />
+      </ToolProviders>
+    </BridgeProvider>
   );
 }

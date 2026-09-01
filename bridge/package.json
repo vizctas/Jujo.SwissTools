@@ -1,0 +1,10 @@
+{
+  "name": "jujo-adb-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local bridge that exposes your installed adb to the Jujo.SwissTools web app. No dependencies.",
+  "type": "module",
+  "bin": { "jujo-adb-bridge": "./server.mjs" },
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "node server.mjs" }
+}

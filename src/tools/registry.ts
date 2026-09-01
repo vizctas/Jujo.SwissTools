@@ -1,3 +1,4 @@
+import { apkTool } from './apk/index.tsx';
 import { qrTool } from './qr/index.tsx';
 import type { PaletteCommand, ToolCommandContext, ToolDefinition } from './types.ts';
 
@@ -12,7 +13,7 @@ const NO_COMMANDS = (): PaletteCommand[] => [];
  */
 export const TOOLS: ReadonlyArray<
   ToolDefinition & { useCommands: (context: ToolCommandContext) => PaletteCommand[] }
-> = [qrTool].map((tool) => ({
+> = [qrTool, apkTool].map((tool) => ({
   ...tool,
   useCommands: tool.useCommands ?? NO_COMMANDS,
 }));
