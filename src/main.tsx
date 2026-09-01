@@ -7,6 +7,7 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/app.css';
 import './styles/apk.css';
+import './styles/sniffer.css';
 import { App } from './App.tsx';
 
 const container = document.getElementById('root');

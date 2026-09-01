@@ -1,0 +1,212 @@
+/*
+ * Capturador de media.
+ *
+ * La lista de URLs es lo que se mira; el logcat en crudo va plegado abajo. Mismo
+ * vocabulario de superficies y semánticos que el resto de la navaja.
+ */
+
+.sniffer-bar {
+  gap: var(--space-4);
+}
+.sniffer-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: var(--space-5);
+  align-items: end;
+}
+.sniffer-actions {
+  display: flex;
+  gap: var(--space-3);
+}
+.sniffer-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.sniffer-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--warning);
+}
+
+/* Latido de «esto está vivo». Sin él, escuchar y estar colgado se ven igual. */
+.pulse {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--success);
+  animation: pulse 1.6s var(--ease-in-out) infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+  }
+}
+
+.sniffer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--table);
+}
+
+.hit-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0 var(--space-6) var(--space-6);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.hit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.hit-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.hit-kind {
+  padding: 0.1em 0.5em;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-radius: var(--radius-full);
+}
+.hit-kind.is-direct {
+  color: var(--success);
+  background: var(--success-soft);
+}
+.hit-kind.is-hls-master,
+.hit-kind.is-hls-media,
+.hit-kind.is-dash {
+  color: var(--primary-ink);
+  background: var(--primary-soft);
+}
+.hit-meta,
+.hit-time {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.hit-time {
+  margin-inline-start: auto;
+}
+
+.hit-url {
+  font-size: var(--text-xs);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  /* Tres líneas y a otra cosa: una URL firmada puede tener 600 caracteres. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.hit-problem {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+.hit-problem svg {
+  margin-top: 0.15em;
+  flex: none;
+  color: var(--danger);
+}
+
+.hit-variants {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  list-style: none;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-md);
+}
+.hit-variants li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+.hit-variants li .btn {
+  margin-inline-start: auto;
+}
+
+.hit-job {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.hit-actions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+/* --------------------------------------------------------- logcat en crudo */
+
+.tail {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.tail-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-4) var(--space-6);
+  font-size: var(--text-sm);
+  color: var(--muted);
+  background: none;
+  border: none;
+  text-align: start;
+}
+.tail-toggle:hover {
+  color: var(--ink);
+}
+.tail-body {
+  max-height: 16rem;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-4) var(--space-6) var(--space-6);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  color: var(--muted);
+  white-space: pre;
+  background: var(--surface-sunken);
+}
+
+@media (max-width: 900px) {
+  .sniffer-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sniffer {
+    min-height: 60vh;
+  }
+}
