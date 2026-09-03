@@ -213,26 +213,43 @@ piece for figures with small feet.
 **Connectors sized by the cut, not by the part.** The connector is dimensioned on
 the actual cross-section the plane passes through: its diameter is a fraction of the
 largest circle that fits inside that section (clamped to 2–12 mm), its depth is
-limited by how much material each half has, and one or two are placed inside the
-section with a guaranteed wall — a narrow arm of a figure gets a small connector, a
-wide slab gets two, and one you ask for that would break through the wall is shrunk
-and you're told. Two modes — a loose dowel, or a peg-and-socket carved into the
+limited by how much material each half has, and they are placed inside the section
+with a guaranteed wall — a narrow arm of a figure gets a small connector, a wide slab
+gets several, and one you ask for that would break through the wall is shrunk and
+you're told. Two modes — a loose dowel, or a peg-and-socket carved into the
 halves themselves — across five sections: round, square, hexagonal, triangular, and
 biconic (self-centering, wider at the cut). The four non-round sections don't rotate
 in their socket, which matters when the two halves have to line up. Loose connectors
 come out as their own pieces, printed flat, so the joint doesn't depend on either
 half's orientation.
 
-**Nothing floats and nothing sinks.** Every piece is clamped to the bed, so no
-amount of separating or dragging puts geometry below z = 0. Objects spread sideways
-along the bed; only the pieces of a cut open along the cut. Drag a piece and let go
-and it falls — onto the bed, or onto whatever is actually under it — so what you see
-is a plate you could print, not a floating exploded diagram.
+**Ask for one to four connectors; get the ones that fit.** They are spread across the
+cut face by farthest-point sampling — as far from each other as the section allows,
+which is what stops the halves twisting — and a section that comes out as two separate
+islands gets at least one connector in each, or the halves would only be joined on one
+side. Anything that would leave less than a wall's worth of material, or land closer
+than two diameters to another connector, is dropped: ask for four on a section that
+holds one and you get one, and the tool says so.
 
-**The tools sit on the model.** A compact list of pieces floats over the canvas,
-grouped under the object each one came from, with its color, its size and whether it
-is closed. The cut controls — axis, connector section, and Cut — are anchored to the
-cut plane itself, because where and with what to cut is decided looking at the piece.
+**Nothing floats and nothing sinks.** Every piece is clamped to the bed, so no
+amount of separating or dragging puts geometry below the floor. Two objects that
+were never joined stay where they are: separating opens what a cut split, not the
+plate. Drag a piece and let go and it falls — onto the bed, or onto whatever is
+actually under it — so what you see is a plate you could print, not a floating
+exploded diagram.
+
+**One slider, and the view keeps up.** Separate, then drag the separation control
+from 0.2× to 4×: the gap along the cut scales with it, live, with no animation in
+the way. On a 60 mm bar cut in half that is a gap from 4 mm to 72 mm — enough to
+look right into the joint and see the socket and the connector that fills it. The
+camera pulls back as the gap grows so nothing leaves the canvas, and never pushes
+in, so a view you framed yourself is left alone as long as it still fits.
+
+**The tools sit beside the model, not on it.** One column down the left edge of the
+canvas: a compact list of pieces at the top, grouped under the object each came from,
+with its color, size and whether it is closed; and at its foot the cut controls —
+axis, connector section, Cut — for whichever piece is selected. The centre stays
+clear, and the empty part of the column passes clicks through to the model behind it.
 The side panel keeps what isn't touched on every cut — printer, connector sizing,
 base, export — folded into steps with one open at a time.
 
