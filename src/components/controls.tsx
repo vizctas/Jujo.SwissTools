@@ -17,7 +17,7 @@ import {
   type ReactNode,
 } from 'react';
 import { isValidHex, normalizeHex } from '../lib/color.ts';
-import { PipetteIcon } from './Icons.tsx';
+import { CheckIcon, ChevronIcon, PipetteIcon } from './Icons.tsx';
 
 /* ---------------------------------------------------------------- Estructura */
 
@@ -25,18 +25,60 @@ export function Group({
   title,
   children,
   action,
+  collapsible = false,
+  open = true,
+  onToggle,
+  summary,
+  step,
+  done,
 }: {
   title: string;
   children: ReactNode;
   action?: ReactNode;
+  /**
+   * Convierte el grupo en un paso plegable. El panel que los usa mantiene uno
+   * solo abierto: leer cinco grupos enteros para tocar uno era el desorden.
+   */
+  collapsible?: boolean;
+  open?: boolean;
+  onToggle?: () => void;
+  /** Lo que hay dentro, dicho en corto, para no tener que abrirlo. */
+  summary?: ReactNode;
+  step?: number;
+  /** El paso ya está resuelto: el número deja sitio a la marca. */
+  done?: boolean;
 }): ReactNode {
+  if (!collapsible) {
+    return (
+      <section className="group">
+        <header className="group-head">
+          <h3>{title}</h3>
+          {action}
+        </header>
+        <div className="group-body">{children}</div>
+      </section>
+    );
+  }
   return (
-    <section className="group">
-      <header className="group-head">
-        <h3>{title}</h3>
-        {action}
-      </header>
-      <div className="group-body">{children}</div>
+    <section className={`group group-fold${open ? ' is-open' : ''}`}>
+      <h3 className="group-fold-head">
+        <button type="button" aria-expanded={open} onClick={onToggle}>
+          {step !== undefined ? (
+            <span className={`group-step${done ? ' is-done' : ''}`}>
+              {done ? <CheckIcon /> : step}
+            </span>
+          ) : null}
+          <span className="group-fold-title">{title}</span>
+          {summary && !open ? <span className="group-summary">{summary}</span> : null}
+          <ChevronIcon className="group-chevron" />
+        </button>
+      </h3>
+      {/* La altura se anima por grid-rows: el contenido no necesita medirse. */}
+      <div className="group-fold-body">
+        <div className="group-fold-clip">
+          <div className="group-body">{children}</div>
+        </div>
+      </div>
     </section>
   );
 }

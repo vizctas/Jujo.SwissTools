@@ -1,0 +1,466 @@
+/*
+ * Taller 3D.
+ *
+ * El lienzo ocupa toda la zona central y todo lo demás flota encima: la lista de
+ * piezas arriba a la izquierda, la vista arriba a la derecha y la barra de corte
+ * pegada al plano. Antes la lista era una bandeja al pie con fichas de 248 px, y
+ * con seis piezas la mesa se quedaba sin sitio justo cuando más se miraba.
+ */
+
+.mesh-bar {
+  gap: var(--space-4);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.mesh-bar.is-dragging {
+  background: var(--primary-soft);
+}
+.mesh-drop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+}
+.mesh-dismiss {
+  margin-inline-start: auto;
+  padding: 0 var(--space-2);
+  font: inherit;
+  font-size: var(--text-xs);
+  color: inherit;
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  cursor: pointer;
+  min-height: 24px;
+}
+
+/* ----------------------------------------------------------------- La mesa */
+
+.mesh-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--table);
+}
+.mesh-stage.is-empty {
+  display: flex;
+}
+.mesh-view {
+  position: absolute;
+  inset: 0;
+}
+.mesh-view.is-unsupported {
+  display: grid;
+  place-items: center;
+  padding: var(--space-8);
+  text-align: center;
+}
+.mesh-view.is-unsupported .row-hint {
+  max-width: 46ch;
+}
+.mesh-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  outline: none;
+}
+
+/* ------------------------------------------------------------------- Vista */
+
+.mesh-hud {
+  position: absolute;
+  inset-block-start: var(--space-4);
+  inset-inline-end: var(--space-4);
+  display: flex;
+  gap: var(--space-2);
+}
+.hud-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-4);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-table);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.hud-btn:hover {
+  border-color: var(--border-strong);
+}
+.hud-btn.is-on {
+  color: var(--primary-ink);
+  background: var(--primary-soft);
+  border-color: var(--primary-edge);
+}
+.hud-btn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+.hud-range {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-table);
+}
+.hud-range input {
+  width: 96px;
+  margin: 0;
+}
+
+.mesh-legend {
+  position: absolute;
+  inset-block-end: var(--space-3);
+  inset-inline-end: var(--space-4);
+  max-width: 46ch;
+  margin: 0;
+  text-align: end;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ Capas */
+
+.layers {
+  position: absolute;
+  inset-block-start: var(--space-4);
+  inset-inline-start: var(--space-4);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: 15rem;
+  max-height: calc(100% - var(--space-8) - 2rem);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+  overflow: hidden;
+}
+.layers-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-inline-end: var(--space-4);
+  font-size: var(--text-sm);
+  border-block-end: 1px solid var(--border);
+}
+.layers-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-height: 34px;
+  padding: 0 var(--space-3);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.layers-toggle:hover {
+  background: var(--surface-2);
+}
+.layers-toggle:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+.layers-toggle .value {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.layers-chevron {
+  color: var(--muted);
+  transition: transform var(--dur-base) var(--ease-in-out);
+}
+.layers.is-collapsed .layers-chevron {
+  transform: rotate(-90deg);
+}
+.layers-tally {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.layers-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-height: 0;
+  transition: grid-template-rows var(--dur-base) var(--ease-in-out);
+}
+.layers.is-collapsed .layers-body {
+  grid-template-rows: 0fr;
+}
+.layers-list {
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-2) 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+}
+.layers-list ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.layer-family {
+  padding: var(--space-3) var(--space-4) var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer {
+  /* Cada fila entra con la explosión: 240 ms, 40 ms de escalón por orden. */
+  animation: layer-in var(--dur-slow) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+@keyframes layer-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .layer {
+    animation: none;
+  }
+}
+
+.layer-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding-inline: var(--space-4);
+}
+/* 24px de objetivo apuntable con 14px de cuadro visible: la fila es estrecha,
+   pero un control de 14px no se acierta con el dedo ni cumple 2.5.8. */
+.layer-swatch {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+}
+.layer-swatch-box {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  overflow: hidden;
+}
+.layer-swatch input {
+  position: absolute;
+  inset: -4px;
+  width: calc(100% + 8px);
+  height: calc(100% + 8px);
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+}
+.layer-swatch:focus-within .layer-swatch-box {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+.layer-name {
+  min-width: 0;
+  min-height: 28px;
+  padding: 0;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--ink);
+  text-align: start;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.layer-name:hover {
+  color: var(--primary-ink);
+}
+.layer-name:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+/* El estado se distingue por forma, no solo por color: marca, aviso o rotura. */
+.layer-flag {
+  display: inline-flex;
+  flex: none;
+  color: var(--success);
+}
+.layer-flag svg {
+  width: 13px;
+  height: 13px;
+}
+.layer-flag.is-warn {
+  color: var(--warning);
+}
+.layer-flag.is-bad {
+  color: var(--danger);
+}
+
+.layer.is-selected {
+  background: var(--primary-soft);
+  box-shadow: inset 2px 0 0 var(--primary-edge);
+}
+.layer.is-selected .layer-name {
+  font-weight: 600;
+}
+.layer-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-3) calc(var(--space-4) + 24px + var(--space-3));
+}
+.layer-detail .value {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.layer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.piece-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+.piece-state svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.piece-state.is-ok {
+  color: var(--success);
+}
+.piece-state.is-warn {
+  color: var(--warning);
+}
+.piece-state.is-bad {
+  color: var(--danger);
+}
+
+/* --------------------------------------------------------- Barra de corte */
+
+.cut-bar {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--primary-edge);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+  /* La posición la escribe el visor en cada fotograma: sin transición, 1:1. */
+  will-change: transform;
+}
+.cut-bar .segmented {
+  padding: 2px;
+  gap: 2px;
+  background: var(--surface-sunken);
+}
+.cut-bar .segment {
+  min-height: 26px;
+  min-width: 26px;
+  padding-inline: var(--space-3);
+}
+.cut-bar .btn {
+  min-height: 30px;
+}
+.cut-pos {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+/* Una punta que señala el plano: la barra dice de qué corte habla. */
+.cut-bar::after {
+  content: '';
+  position: absolute;
+  inset-block-start: 100%;
+  inset-inline-start: 50%;
+  width: 9px;
+  height: 9px;
+  background: var(--surface);
+  border-inline-end: 1px solid var(--primary-edge);
+  border-block-end: 1px solid var(--primary-edge);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.mesh-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* ------------------------------------------------------------- Adaptación */
+
+@media (max-width: 900px) {
+  .mesh-stage {
+    min-height: 62vh;
+  }
+  .mesh-legend {
+    display: none;
+  }
+  /* La lista pasa al pie y a lo ancho: en vertical sobra alto y falta ancho. */
+  .layers {
+    inset-block: auto var(--space-4);
+    inset-inline: var(--space-4);
+    width: auto;
+    max-height: 45%;
+  }
+}
+
+@media (hover: none) {
+  .hud-btn,
+  .layers-toggle {
+    min-height: 44px;
+  }
+  .layer-name {
+    min-height: 44px;
+  }
+  .layer-swatch {
+    width: 32px;
+    height: 44px;
+  }
+  .layer-row {
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+  }
+  .layer-detail {
+    padding-inline-start: calc(var(--space-4) + 32px + var(--space-3));
+  }
+  .layer-actions .icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+  .cut-bar .segment {
+    min-height: 36px;
+    min-width: 36px;
+  }
+}

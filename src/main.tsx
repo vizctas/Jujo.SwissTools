@@ -9,6 +9,7 @@ import './styles/app.css';
 import './styles/apk.css';
 import './styles/sniffer.css';
 import './styles/bg.css';
+import './styles/mesh.css';
 import { App } from './App.tsx';
 
 const container = document.getElementById('root');

@@ -52,6 +52,19 @@ export const InfoIcon = (props: IconProps): ReactNode => (
   </Icon>
 );
 
+export const CubeIcon = (props: IconProps): ReactNode => (
+  <Icon {...props}>
+    <path d="M8 1.8 13.8 5v6L8 14.2 2.2 11V5z" />
+    <path d="M2.4 5.2 8 8.3l5.6-3.1M8 8.3v5.8" />
+  </Icon>
+);
+
+export const ChevronIcon = (props: IconProps): ReactNode => (
+  <Icon {...props}>
+    <path d="m4.5 6.25 3.5 3.5 3.5-3.5" />
+  </Icon>
+);
+
 export const SearchIcon = (props: IconProps): ReactNode => (
   <Icon {...props}>
     <circle cx="7.2" cy="7.2" r="4.4" />
