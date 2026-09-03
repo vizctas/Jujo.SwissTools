@@ -8,7 +8,7 @@ a site buried in ads that stamps a watermark on the result, or a subscription fo
 something you'll open twice a year. This is the third option: it runs on your own
 machine, nothing is uploaded to anyone's server, and there is no account to make.
 
-Four tools so far. All finished, not placeholders, and they share one shell:
+Five tools so far. All finished, not placeholders, and they share one shell:
 `Ctrl/Cmd+K` opens a single searchable list holding every tool, every saved
 preset and every recent file. Adding a tool means writing one module that
 declares its own panel and its own commands; the shell doesn't know what any of
@@ -177,6 +177,73 @@ to the subject's bounding box. Hold a thumbnail down to flash back to the origin
 — a cutout is judged by its edge, and the edge doesn't show in a preview with
 nothing to compare it to.
 
+## Mesh workshop
+
+Open a 3D model — STL, OBJ, glTF/GLB or PLY — and get it ready to print: find
+the separate objects inside it, check each one is watertight, fix the ones that
+aren't, split what won't fit on your bed, and save every piece on its own.
+
+**It finds the objects even when the file says there's one.** Most STL exports
+flatten a whole scene into a single unnamed body. The tool welds duplicate
+vertices, walks the triangle graph, and turns each connected island into its own
+piece — so a keycap set or a multi-part figure comes apart without anyone having
+gone back to the modeling program. Runaway exports with hundreds of stray
+fragments are capped: the largest islands become pieces and the crumbs are
+grouped into one.
+
+**Color comes from wherever the file put it.** Several materials, a color per
+vertex, or a UV texture — the source is detected on load and shown in the panel.
+"Separate by color" clusters faces by tone and produces one piece per color, which
+is what a multi-material print needs. Files with no color at all get a distinct
+swatch per piece, editable in the tray, and that color travels into the 3MF.
+
+**Watertight means something here.** Every piece is checked for boundary edges
+(holes) and edges shared by more than two faces, and the tray says so next to
+its measurements. Repair closes simple holes, flips inside-out meshes, and
+fuses duplicate vertices. It also says which holes it couldn't close instead
+of pretending. Volume and genus for closed pieces come from
+[Manifold](https://github.com/elalish/manifold), the same kernel the slicers use.
+
+**Cutting that leaves you with parts that assemble.** Pick a piece, pick an axis,
+drag the plane in the viewport (it follows the pointer 1:1 — it's a tool, not an
+animation), and cut. "Cut to fit" does this automatically along the mid-planes
+until every piece fits the build volume you set. A flat base can be fused under any
+piece for figures with small feet.
+
+**Connectors sized by the cut, not by the part.** The connector is dimensioned on
+the actual cross-section the plane passes through: its diameter is a fraction of the
+largest circle that fits inside that section (clamped to 2–12 mm), its depth is
+limited by how much material each half has, and one or two are placed inside the
+section with a guaranteed wall — a narrow arm of a figure gets a small connector, a
+wide slab gets two, and one you ask for that would break through the wall is shrunk
+and you're told. Two modes — a loose dowel, or a peg-and-socket carved into the
+halves themselves — across five sections: round, square, hexagonal, triangular, and
+biconic (self-centering, wider at the cut). The four non-round sections don't rotate
+in their socket, which matters when the two halves have to line up. Loose connectors
+come out as their own pieces, printed flat, so the joint doesn't depend on either
+half's orientation.
+
+**Nothing floats and nothing sinks.** Every piece is clamped to the bed, so no
+amount of separating or dragging puts geometry below z = 0. Objects spread sideways
+along the bed; only the pieces of a cut open along the cut. Drag a piece and let go
+and it falls — onto the bed, or onto whatever is actually under it — so what you see
+is a plate you could print, not a floating exploded diagram.
+
+**The tools sit on the model.** A compact list of pieces floats over the canvas,
+grouped under the object each one came from, with its color, its size and whether it
+is closed. The cut controls — axis, connector section, and Cut — are anchored to the
+cut plane itself, because where and with what to cut is decided looking at the piece.
+The side panel keeps what isn't touched on every cut — printer, connector sizing,
+base, export — folded into steps with one open at a time.
+
+**Printer presets.** Bambu Lab, Creality, Anycubic, Prusa, Elegoo, Sovol, Flashforge,
+QIDI and Voron, or type your own build volume; it's remembered.
+
+**Export per piece.** STL and OBJ produce one file per piece. 3MF produces one
+file holding every piece with its color and name, which is what Bambu Studio,
+PrusaSlicer and Cura read directly. All three writers are in the repo, 3MF's ZIP
+included, so the output doesn't depend on anyone else's exporter.
+
 ## Running it
 
 ```bash
@@ -184,8 +251,9 @@ npm install
 npm run dev
 ```
 
-`npm run check` runs the core self-check: format escaping, render geometry, and
-every branch of the scannability rules. `npm run build` produces the installable
+`npm run check` runs the self-checks: format escaping, render geometry and every
+branch of the QR scannability rules, plus the mesh geometry — welding, island
+detection, hole loops, hole filling, color clustering and the split plan. `npm run build` produces the installable
 PWA. The bridge that backs the APK installer and the media capturer is a separate
 process (see above) — nothing else needs installing for it, though the media
 capturer wants `ffmpeg` on your `PATH` to handle segmented streams.
@@ -201,6 +269,13 @@ everything drawn on top of the module matrix is here, because no rendering
 library gives you custom module shapes, custom finder patterns, a punched-out
 center and typeset captions in one vector file without a fight. APK and ZIP
 parsing use the browser's own `DecompressionStream`.
+
+The mesh workshop draws with [three.js](https://threejs.org) and reads formats
+with its loaders, but the geometry that decides anything — welding, island
+detection, hole loops, color clustering — is plain TypeScript over flat arrays in
+`src/tools/mesh/geometry.ts`, with no DOM and no WebGL, so it runs under Node in
+the self-check. Boolean operations (cuts, dowel holes, bases) go to Manifold's
+WebAssembly build in a Web Worker, so a slow cut never freezes the viewport.
 
 The bridge is Node with zero runtime dependencies: `node:sqlite` for the device
 and capture memory, Server-Sent Events and plain POST instead of WebSocket, and
@@ -222,14 +297,17 @@ history live in the bridge's own SQLite file in your home directory.
 
 ## Status
 
-Early, and honest about it. All four tools are complete and in use. PDF export
+Early, and honest about it. All five tools are complete and in use. PDF export
 from the QR generator isn't there yet; SVG covers the vector case. The APK
 installer handles single APKs, not app bundles or split APKs, and says so when you
 hand it one. The media capturer won't touch an encrypted HLS stream — it says so
 and stops rather than attempting to work around DRM. The background-removal tool
 downloads real model weights on first use per model (from a few megabytes to a
 few hundred), which needs a real connection the first time even though nothing
-after that does.
+after that does. The mesh workshop's repair closes flat, convex holes and flips
+whole meshes; a twisted hole or a mesh with mixed face orientation is reported,
+not silently patched, and cutting a piece that isn't watertight is refused with
+the reason.
 
 ## License
 
