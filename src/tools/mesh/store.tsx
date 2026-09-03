@@ -248,11 +248,18 @@ function describeJoints(reports: JointReport[]): string | null {
     const total = done.reduce((sum, r) => sum + r.count, 0);
     const sample = done[0]!;
     const size = `${sample.diameter.toFixed(1)} × ${sample.depth.toFixed(1)} mm`;
-    const word = SHAPE_WORDS[sample.shape][total === 1 ? 0 : 1];
+    const one = total === 1;
+    const word = SHAPE_WORDS[sample.shape][one ? 0 : 1];
     parts.push(
       sample.mode === 'plug'
-        ? `${total} ${total === 1 ? `macho-hembra ${word}` : `macho-hembra ${word}`} de ${size}, tallados en las mitades.`
-        : `${total} ${total === 1 ? 'conector' : 'conectores'} ${word} de ${size}, sueltos: se imprimen tumbados.`,
+        ? `${total} ${one ? 'macho-hembra' : 'machos-hembra'} ${word} de ${size}, ${one ? 'tallado' : 'tallados'} en las mitades.`
+        : `${total} ${one ? 'conector' : 'conectores'} ${word} de ${size}, ${one ? 'suelto: se imprime tumbado' : 'sueltos: se imprimen tumbados'}.`,
+    );
+  }
+  const short = reports.find((r) => r.requested > r.count);
+  if (short) {
+    parts.push(
+      `Se pidieron ${short.requested} por corte y solo ${short.count === 1 ? 'cabe uno' : `caben ${short.count}`}: no hay sitio para más dejando pared.`,
     );
   }
   if (skipped.length > 0) parts.push(`Sin conector en ${skipped.length === 1 ? 'un corte' : `${skipped.length} cortes`}: ${skipped[0]!.skipped}.`);
@@ -337,7 +344,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
   });
   const [base, setBaseState] = useState<BaseState>({ height: 3, margin: 5 });
   const [exploded, setExploded] = useState(false);
-  const [spread, setSpread] = useState(0.6);
+  const [spread, setSpread] = useState(1);
   const [format, setFormat] = useState<ExportFormat>('stl');
   const [exporting, setExporting] = useState(false);
 
@@ -448,7 +455,9 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
         });
         setParts(created);
         setSelectedId(created[0]?.id ?? null);
-        setExploded(created.length > 1);
+        // Nada que abrir todavía: separar mueve las piezas de un corte, no objetos
+        // que ya venían sueltos.
+        setExploded(false);
         const open = created.filter((part) => !part.topology.watertight).length;
         setNotice(
           [
@@ -490,7 +499,6 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
     }
     setParts(next);
     setSelectedId(next[0]?.id ?? null);
-    setExploded(true);
     setNotice(`${next.length} objetos.${grouped > 0 ? ` ${grouped} islas diminutas agrupadas.` : ''}`);
     for (const part of next) void analyze(part);
   }, [analyze]);

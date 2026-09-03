@@ -41,12 +41,6 @@ export interface ViewportProps {
   onCutPosition: (position: number) => void;
   volume: Vec3;
   showVolume: boolean;
-  /**
-   * Dónde cae el plano de corte en pantalla, para anclarle la barra de corte.
-   * Se llama en el bucle de dibujo, así que quien escuche debe tocar el DOM
-   * directamente y no provocar un render de React por fotograma.
-   */
-  onCutAnchor?: (screen: { x: number; y: number } | null) => void;
 }
 
 /* ----------------------------------------------------------------- Curvas */
@@ -151,7 +145,7 @@ class Stage3D {
   private hoveredId: string | null = null;
   private selectedId: string | null = null;
   private exploded = false;
-  private spread = 0.6;
+  private spread = 1;
   private cut: CutState | null = null;
   private volume: Vec3 = [256, 256, 256];
   private showVolume = false;
@@ -159,7 +153,6 @@ class Stage3D {
   private sceneRadius = 1;
   /** La cama: el suelo del modelo tal como se cargó. Nada baja de aquí. */
   private bedZ = 0;
-  private anchor: { x: number; y: number } | null = null;
   private framed = false;
   private dirty = true;
   private frame = 0;
@@ -173,11 +166,7 @@ class Stage3D {
 
   constructor(
     private container: HTMLElement,
-    private handlers: {
-      onSelect: (id: string | null) => void;
-      onCutPosition: (position: number) => void;
-      onCutAnchor: (screen: { x: number; y: number } | null) => void;
-    },
+    private handlers: { onSelect: (id: string | null) => void; onCutPosition: (position: number) => void },
   ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -360,6 +349,7 @@ class Stage3D {
     this.bedZ = parts.length > 0 ? Math.min(...parts.map((part) => part.bounds.min[2])) : 0;
     this.frameScene();
     this.layout(true);
+    this.ensureVisible();
     this.updatePlane();
     this.invalidate();
   }
@@ -478,27 +468,44 @@ class Stage3D {
     this.layout(true, true);
   }
 
-  /** Destino de separación de una pieza: su objeto se aparta de los demás, y ella de su objeto. */
+  /**
+   * Destino de separación de una pieza: se aleja del centro del objeto del que
+   * salió, en proporción a dónde quedó. Un corte en Z se abre en Z, y el hueco
+   * enseña el alojamiento con su conector dentro.
+   *
+   * Solo se abre lo que un corte partió. Dos objetos que nunca estuvieron unidos
+   * ya están separados: apartarlos no enseña nada y desparrama la escena.
+   */
   private target(entry: Entry): { to: THREE.Vector3; distance: number } {
     const to = new THREE.Vector3();
     if (!this.exploded) return { to, distance: 0 };
-    const familyCenter = new THREE.Vector3(...entry.part.family.center);
-    const center = new THREE.Vector3(...entry.part.bounds.center);
+    const away = new THREE.Vector3(...entry.part.bounds.center).sub(new THREE.Vector3(...entry.part.family.center));
+    to.addScaledVector(away, this.spread * 1.2);
+    return { to, distance: away.length() };
+  }
 
-    const direction = familyCenter.clone().sub(this.sceneCenter);
-    const distance = direction.length();
-    const families = new Set([...this.entries.values()].map((e) => e.part.family.id)).size;
-    if (families > 1) {
-      // Los objetos se apartan por la cama, no en altura: todos siguen apoyados.
-      direction.z = 0;
-      if (direction.lengthSq() < (this.sceneRadius * 0.01) ** 2) direction.set(1, 0, 0);
-      else direction.normalize();
-      to.copy(direction).multiplyScalar(this.sceneRadius * 0.28 + distance * 0.35);
-    }
-    // Dentro del objeto: cada trozo se aleja del centro original en proporción a
-    // dónde quedó. Un corte en Z se abre en Z; el hueco enseña taladro y espiga.
-    to.addScaledVector(center.sub(familyCenter), this.spread);
-    return { to, distance };
+  /**
+   * Que lo separado siga cabiendo en la mesa. Solo se aleja la cámara, nunca se
+   * acerca: si ya cabía, no se toca lo que el usuario haya encuadrado a mano.
+   */
+  private ensureVisible(): void {
+    const box = new THREE.Box3();
+    for (const entry of this.entries.values()) box.expandByObject(entry.mesh);
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+    const radius = Math.max(1, box.getSize(new THREE.Vector3()).length() / 2);
+    const vertical = (this.camera.fov * Math.PI) / 180;
+    const horizontal = 2 * Math.atan(Math.tan(vertical / 2) * this.camera.aspect);
+    // Manda el lado más estrecho del encuadre: en apaisado, el alto.
+    const needed = (radius / Math.sin(Math.min(vertical, horizontal) / 2)) * 1.06;
+    const direction = this.camera.position.clone().sub(this.controls.target);
+    if (direction.length() >= needed) return;
+    this.controls.target.copy(center);
+    this.camera.position.copy(center).addScaledVector(direction.normalize(), needed);
+    this.camera.far = Math.max(this.camera.far, needed * 8);
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+    this.invalidate();
   }
 
   /** Recoloca las piezas. `quiet` no re-anima las que ya están en su sitio; `instant` no anima nada. */
@@ -523,6 +530,15 @@ class Stage3D {
         : { from: entry.offset.clone(), to, start: now, duration: GATHER_MS, ease: EASE_IN_OUT };
       index += 1;
     }
+    // Se mide sobre el destino, no sobre el fotograma actual: la cámara llega
+    // antes que las piezas y no hay que verlas asomar por el borde a mitad de camino.
+    for (const { entry, to } of targets) {
+      const at = to.clone().add(entry.manual);
+      at.z = bedClamp(entry.part.bounds.min[2], at.z, this.bedZ);
+      entry.mesh.position.copy(at);
+    }
+    this.ensureVisible();
+    for (const entry of this.entries.values()) this.place(entry);
     this.invalidate();
   }
 
@@ -557,7 +573,6 @@ class Stage3D {
     const entry = this.selectedEntry();
     if (!entry || !this.cut) {
       this.plane.visible = false;
-      this.reportAnchor();
       return;
     }
     const { min, size, center } = entry.part.bounds;
@@ -577,7 +592,6 @@ class Stage3D {
     // PlaneGeometry mira a +Z; se orienta hacia el eje del corte.
     this.plane.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), AXIS_VECTORS[this.cut.axis]);
     this.plane.visible = true;
-    this.reportAnchor();
   }
 
   /* ------------------------------------------------------------- Puntero */
@@ -772,28 +786,8 @@ class Stage3D {
     if (moved || animating || this.dirty) {
       this.dirty = false;
       this.renderer.render(this.scene, this.camera);
-      this.reportAnchor();
     }
   };
-
-  /** Proyecta el plano a pantalla para la barra de corte. Solo avisa si cambió. */
-  private reportAnchor(): void {
-    let next: { x: number; y: number } | null = null;
-    if (this.plane.visible) {
-      const ndc = this.plane.position.clone().project(this.camera);
-      if (ndc.z < 1) {
-        next = {
-          x: (ndc.x * 0.5 + 0.5) * this.renderer.domElement.clientWidth,
-          y: (-ndc.y * 0.5 + 0.5) * this.renderer.domElement.clientHeight,
-        };
-      }
-    }
-    const before = this.anchor;
-    if (!next && !before) return;
-    if (next && before && Math.abs(next.x - before.x) < 0.5 && Math.abs(next.y - before.y) < 0.5) return;
-    this.anchor = next;
-    this.handlers.onCutAnchor(next);
-  }
 
   dispose(): void {
     cancelAnimationFrame(this.frame);
@@ -821,16 +815,8 @@ class Stage3D {
 export function Viewport(props: ViewportProps): ReactNode {
   const container = useRef<HTMLDivElement>(null);
   const stage = useRef<Stage3D | null>(null);
-  const handlers = useRef({
-    onSelect: props.onSelect,
-    onCutPosition: props.onCutPosition,
-    onCutAnchor: props.onCutAnchor,
-  });
-  handlers.current = {
-    onSelect: props.onSelect,
-    onCutPosition: props.onCutPosition,
-    onCutAnchor: props.onCutAnchor,
-  };
+  const handlers = useRef({ onSelect: props.onSelect, onCutPosition: props.onCutPosition });
+  handlers.current = { onSelect: props.onSelect, onCutPosition: props.onCutPosition };
   const [unsupported, setUnsupported] = useState(false);
 
   useEffect(() => {
@@ -839,7 +825,6 @@ export function Viewport(props: ViewportProps): ReactNode {
       stage.current = new Stage3D(container.current, {
         onSelect: (id) => handlers.current.onSelect(id),
         onCutPosition: (position) => handlers.current.onCutPosition(position),
-        onCutAnchor: (screen) => handlers.current.onCutAnchor?.(screen),
       });
     } catch {
       setUnsupported(true);

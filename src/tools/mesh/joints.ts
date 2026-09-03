@@ -61,37 +61,114 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-/** ¿Está el punto dentro de la sección? Un cuadradito y una intersección. */
-function inside(wasm: Wasm, section: CS, point: [number, number]): boolean {
-  const probe = wasm.CrossSection.square([0.01, 0.01], true).translate(point);
-  const hit = probe.intersect(section);
-  const yes = !hit.isEmpty();
-  probe.delete();
-  hit.delete();
-  return yes;
+/**
+ * Los contornos de una sección, tal como los da Manifold: exteriores y huecos.
+ * Trabajar sobre ellos en JS evita una booleana de WASM por cada candidato, que
+ * es lo que hacía falta para poder tantear cientos de posiciones.
+ */
+type Ring = ReadonlyArray<readonly [number, number]>;
+
+/** Par-impar sobre todos los contornos: los huecos salen fuera sin mirar el giro. */
+function pointInside(rings: Ring[], x: number, y: number): boolean {
+  let inside = false;
+  for (const ring of rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+      const [xi, yi] = ring[i]!;
+      const [xj, yj] = ring[j]!;
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+  }
+  return inside;
 }
 
-/** El punto interior más cercano al candidato, buscando en una rejilla. */
-function nearestInside(wasm: Wasm, section: CS, candidate: [number, number]): [number, number] | null {
-  if (inside(wasm, section, candidate)) return candidate;
-  const box = section.bounds();
-  let best: [number, number] | null = null;
-  let bestDistance = Infinity;
-  const steps = 9;
-  for (let i = 0; i <= steps; i += 1) {
-    for (let j = 0; j <= steps; j += 1) {
-      const p: [number, number] = [
-        box.min[0] + ((box.max[0] - box.min[0]) * i) / steps,
-        box.min[1] + ((box.max[1] - box.min[1]) * j) / steps,
-      ];
-      const d = Math.hypot(p[0] - candidate[0], p[1] - candidate[1]);
-      if (d < bestDistance && inside(wasm, section, p)) {
-        best = p;
-        bestDistance = d;
-      }
+/** Distancia al borde más cercano: cuánto material rodea a un punto. */
+function edgeDistance(rings: Ring[], x: number, y: number): number {
+  let best = Infinity;
+  for (const ring of rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+      const [xi, yi] = ring[i]!;
+      const [xj, yj] = ring[j]!;
+      const dx = xj - xi;
+      const dy = yj - yi;
+      const len2 = dx * dx + dy * dy || 1;
+      const t = clamp(((x - xi) * dx + (y - yi) * dy) / len2, 0, 1);
+      const d = Math.hypot(x - (xi + t * dx), y - (yi + t * dy));
+      if (d < best) best = d;
     }
   }
   return best;
+}
+
+/**
+ * Reparte hasta `wanted` conectores dentro de la zona útil —la sección ya
+ * encogida por radio y pared—, separados al menos `minGap` entre centros.
+ *
+ * Uno solo va al punto más hondo, que es el que más material tiene alrededor.
+ * Varios se reparten por muestreo del más lejano: el primero lo más lejos
+ * posible del centro, el segundo lo más lejos del primero, y así. En un
+ * rectángulo eso da los extremos o las cuatro esquinas, que es justo lo que
+ * impide que las mitades giren una sobre otra.
+ *
+ * Si no cabe otro sin invadir la separación mínima, se para: salen los que
+ * encajan, no los que se pidieron.
+ */
+function placeSpots(usable: CS, wanted: number, minGap: number): [number, number][] {
+  const rings = usable.toPolygons() as unknown as Ring[];
+  if (rings.length === 0) return [];
+  const box = usable.bounds();
+  const width = box.max[0] - box.min[0];
+  const height = box.max[1] - box.min[1];
+
+  const steps = 24;
+  const candidates: { p: [number, number]; depth: number }[] = [];
+  for (let i = 0; i <= steps; i += 1) {
+    for (let j = 0; j <= steps; j += 1) {
+      const x = box.min[0] + (width * i) / steps;
+      const y = box.min[1] + (height * j) / steps;
+      if (!pointInside(rings, x, y)) continue;
+      candidates.push({ p: [x, y], depth: edgeDistance(rings, x, y) });
+    }
+  }
+  // Una zona útil muy fina se le escapa a la rejilla; sus vértices no.
+  if (candidates.length === 0) {
+    for (const ring of rings) {
+      for (const [x, y] of ring) candidates.push({ p: [x, y], depth: 0 });
+    }
+  }
+  if (candidates.length === 0) return [];
+
+  const chosen: [number, number][] = [];
+  if (wanted <= 1) {
+    chosen.push(candidates.reduce((a, b) => (b.depth > a.depth ? b : a)).p);
+    return chosen;
+  }
+
+  // Semilla: lo más lejos del centro. Con el centro como semilla, dos conectores
+  // saldrían uno al medio y otro a un lado en vez de repartidos y simétricos.
+  const cx = (box.min[0] + box.max[0]) / 2;
+  const cy = (box.min[1] + box.max[1]) / 2;
+  const score = (c: { p: [number, number]; depth: number }, from: [number, number][]): number => {
+    const gap = from.length === 0 ? Math.hypot(c.p[0] - cx, c.p[1] - cy) : Math.min(...from.map((s) => Math.hypot(s[0] - c.p[0], s[1] - c.p[1])));
+    return gap + c.depth * 0.5;
+  };
+  chosen.push(candidates.reduce((a, b) => (score(b, []) > score(a, []) ? b : a)).p);
+
+  while (chosen.length < wanted) {
+    let best: [number, number] | null = null;
+    let bestScore = -Infinity;
+    for (const candidate of candidates) {
+      const gap = Math.min(...chosen.map((s) => Math.hypot(s[0] - candidate.p[0], s[1] - candidate.p[1])));
+      if (gap < minGap) continue;
+      const value = gap + candidate.depth * 0.5;
+      if (value > bestScore) {
+        bestScore = value;
+        best = candidate.p;
+      }
+    }
+    if (!best) break;
+    chosen.push(best);
+  }
+  return chosen;
 }
 
 /** Radio del mayor círculo que cabe en la sección, por bisección sobre offset(). */
@@ -115,12 +192,12 @@ function inscribedRadius(section: CS): number {
  * `thickness` es cuánto material hay a cada lado del plano, a lo largo de la normal.
  */
 export function planJoint(
-  wasm: Wasm,
   aligned: M,
   height: number,
   spec: JointSpec,
   thickness: { above: number; below: number },
 ): { plan: JointPlan | null; report: JointReport } {
+  const requested = spec.count > 0 ? spec.count : 0;
   const report = (plan: JointPlan | null, skipped: string | null): { plan: JointPlan | null; report: JointReport } => ({
     plan,
     report: {
@@ -129,6 +206,7 @@ export function planJoint(
       diameter: plan?.diameter ?? 0,
       depth: plan?.depth ?? 0,
       count: plan?.spots.length ?? 0,
+      requested,
       skipped,
     },
   });
@@ -152,37 +230,21 @@ export function planJoint(
 
     const radius = diameter / 2;
     const usable = section.offset(-(radius + wall(radius)), 'Round');
-    const regions = usable.decompose().sort((a, b) => b.area() - a.area());
-    usable.delete();
-
-    const wanted = spec.count > 0 ? spec.count : MAX_PINS;
-    const spots: [number, number][] = [];
-    for (const region of regions) {
-      if (spots.length >= wanted) break;
-      const box = region.bounds();
-      const w = box.max[0] - box.min[0];
-      const h = box.max[1] - box.min[1];
-      const cx = (box.min[0] + box.max[0]) / 2;
-      const cy = (box.min[1] + box.max[1]) / 2;
-      const long = Math.max(w, h);
-      const candidates: [number, number][] =
-        long >= 8 * radius && spots.length + 2 <= wanted
-          ? w >= h
-            ? [[box.min[0] + w * 0.25, cy], [box.min[0] + w * 0.75, cy]]
-            : [[cx, box.min[1] + h * 0.25], [cx, box.min[1] + h * 0.75]]
-          : [[cx, cy]];
-      for (const candidate of candidates) {
-        const spot = nearestInside(wasm, region, candidate);
-        if (spot && !spots.some((s) => Math.hypot(s[0] - spot[0], s[1] - spot[1]) < diameter * 2)) spots.push(spot);
-      }
-      // En modo automático una región grande recibe sus espigas y las pequeñas nada:
-      // repartir cuatro espigas por cuatro islas diminutas no une nada.
-      if (spec.count === 0 && spots.length >= 2) break;
+    try {
+      if (usable.isEmpty()) return report(null, 'no hay sitio con pared suficiente');
+      // En automático: uno por cada trozo suelto de la sección —si son dos, las
+      // mitades tienen que quedar unidas por los dos— y más según lo que dé el área.
+      const lobes = usable.decompose();
+      const lobeCount = lobes.length;
+      for (const lobe of lobes) lobe.delete();
+      const byArea = Math.round(Math.sqrt(Math.max(0, usable.area())) / (3 * diameter));
+      const wanted = spec.count > 0 ? spec.count : clamp(Math.max(lobeCount, byArea), 1, MAX_PINS);
+      const spots = placeSpots(usable, wanted, diameter * 2);
+      if (spots.length === 0) return report(null, 'no hay sitio para un conector con pared suficiente');
+      return report({ mode: spec.mode, shape: spec.shape, diameter, depth, spots }, null);
+    } finally {
+      usable.delete();
     }
-    for (const region of regions) region.delete();
-    if (spots.length === 0) return report(null, 'no hay sitio para una espiga con pared suficiente');
-
-    return report({ mode: spec.mode, shape: spec.shape, diameter, depth, spots }, null);
   } finally {
     section.delete();
   }

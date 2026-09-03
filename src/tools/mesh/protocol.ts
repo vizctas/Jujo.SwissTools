@@ -50,7 +50,7 @@ export interface JointSpec {
   depth: number;
   /** Holgura radial para que la espiga entre sin lija. */
   clearance: number;
-  /** Número de espigas por corte; 0 = según el espacio disponible. */
+  /** Cuántos conectores por corte; 0 = los que pida la sección. */
   count: number;
 }
 
@@ -60,7 +60,10 @@ export interface JointReport {
   shape: JointShape;
   diameter: number;
   depth: number;
+  /** Cuántos se pusieron de verdad. */
   count: number;
+  /** Cuántos se pidieron; 0 si se dejó en automático. */
+  requested: number;
   /** Por qué no se pudo poner unión, si no se pudo. */
   skipped: string | null;
 }

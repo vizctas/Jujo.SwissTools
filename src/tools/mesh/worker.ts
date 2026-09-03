@@ -121,7 +121,7 @@ function cutOnce(manifold: ManifoldInstance, plane: Plane, joint: JointSpec | nu
       above: above.boundingBox().max[2] - plane.offset,
       below: plane.offset - below.boundingBox().min[2],
     };
-    const { plan, report } = planJoint(wasm, aligned, plane.offset, joint, thickness);
+    const { plan, report } = planJoint(aligned, plane.offset, joint, thickness);
     joints.push(report);
     if (plan) result = applyJoint(wasm, above, below, plane.offset, plan, joint.clearance);
   }

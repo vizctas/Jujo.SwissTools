@@ -23,7 +23,7 @@ const auto: JointSpec = { mode: 'dowel', shape: 'round', auto: true, diameter: 6
   const { forward, back } = frame([1, 0, 0]);
   const aligned = forward(bar);
   const [above, below] = aligned.splitByPlane([0, 0, 1], 50);
-  const { plan, report } = planJoint(wasm, aligned, 50, auto, { above: 50, below: 50 });
+  const { plan, report } = planJoint(aligned, 50, auto, { above: 50, below: 50 });
   assert.ok(plan, `debe haber plan: ${report.skipped}`);
   assert.ok(Math.abs(plan.diameter - 6) < 0.01, `diámetro ~6, fue ${plan.diameter}`);
   assert.ok(plan.depth >= 9 && plan.depth <= 10, `profundidad ~9.6, fue ${plan.depth}`);
@@ -42,7 +42,7 @@ const auto: JointSpec = { mode: 'dowel', shape: 'round', auto: true, diameter: 6
 // ---- placa 100×100×20, corte en Z: dos espigas separadas, no una ----
 {
   const slab = Manifold.cube([100, 100, 20], false);
-  const { plan } = planJoint(wasm, slab, 10, auto, { above: 10, below: 10 });
+  const { plan } = planJoint(slab, 10, auto, { above: 10, below: 10 });
   assert.ok(plan);
   assert.equal(plan.spots.length, 2, 'una cara ancha recibe dos espigas');
   assert.ok(plan.depth <= 4.5, `la profundidad respeta el grosor de 20 (≤ 4.5), fue ${plan.depth}`);
@@ -54,7 +54,7 @@ const auto: JointSpec = { mode: 'dowel', shape: 'round', auto: true, diameter: 6
   const leg = Manifold.cube([8, 40, 20], false);
   const ell = foot.add(leg);
   const manual: JointSpec = { ...auto, auto: false, diameter: 6, count: 1 };
-  const { plan, report } = planJoint(wasm, ell, 10, manual, { above: 10, below: 10 });
+  const { plan, report } = planJoint(ell, 10, manual, { above: 10, below: 10 });
   assert.ok(plan, `debe caber algo: ${report.skipped}`);
   assert.ok(plan.diameter < 6, `una espiga de 6 no cabe en 8 mm de pared; fue ${plan.diameter}`);
   assert.ok(plan.diameter >= 2);
@@ -65,7 +65,7 @@ const auto: JointSpec = { mode: 'dowel', shape: 'round', auto: true, diameter: 6
   const bar = Manifold.cube([30, 30, 100], false);
   const [above, below] = bar.splitByPlane([0, 0, 1], 50);
   const spec: JointSpec = { ...auto, mode: 'plug' };
-  const { plan } = planJoint(wasm, bar, 50, spec, { above: 50, below: 50 });
+  const { plan } = planJoint(bar, 50, spec, { above: 50, below: 50 });
   assert.ok(plan);
   const applied = applyJoint(wasm, above, below, 50, plan, spec.clearance);
   assert.equal(applied.pins.length, 0);
@@ -78,7 +78,7 @@ const auto: JointSpec = { mode: 'dowel', shape: 'round', auto: true, diameter: 6
   const bar = Manifold.cube([30, 30, 100], false);
   const [above, below] = bar.splitByPlane([0, 0, 1], 50);
   const spec: JointSpec = { ...auto, shape: 'cone' };
-  const { plan } = planJoint(wasm, bar, 50, spec, { above: 50, below: 50 });
+  const { plan } = planJoint(bar, 50, spec, { above: 50, below: 50 });
   assert.ok(plan);
   const applied = applyJoint(wasm, above, below, 50, plan, spec.clearance);
   const pin = applied.pins[0]!;
@@ -93,7 +93,7 @@ const auto: JointSpec = { mode: 'dowel', shape: 'round', auto: true, diameter: 6
     const bar = Manifold.cube([30, 30, 100], false);
     const [above, below] = bar.splitByPlane([0, 0, 1], 50);
     const spec: JointSpec = { ...auto, shape };
-    const { plan } = planJoint(wasm, bar, 50, spec, { above: 50, below: 50 });
+    const { plan } = planJoint(bar, 50, spec, { above: 50, below: 50 });
     assert.ok(plan);
     const applied = applyJoint(wasm, above, below, 50, plan, spec.clearance);
     const section = applied.pins[0]!.slice(50);
@@ -111,6 +111,66 @@ const auto: JointSpec = { mode: 'dowel', shape: 'round', auto: true, diameter: 6
     const hole = applied.above.slice(50 + 0.5);
     assert.ok(hole.area() < 900 - section.area(), `${shape}: el alojamiento es mayor que el conector`);
   }
+}
+
+// ---- cantidad pedida: cuatro caben en una placa, repartidos y con pared ----
+{
+  const slab = Manifold.cube([100, 100, 40], false);
+  const { plan, report } = planJoint(slab, 20, { ...auto, count: 4 }, { above: 20, below: 20 });
+  assert.ok(plan);
+  assert.equal(report.requested, 4);
+  // Anotado a mano: `assert` es una función de aserción y TypeScript no sabe
+  // inferir dentro de un bucle que vuelve a leer lo que la aserción estrechó.
+  const spots: Array<[number, number]> = plan.spots;
+  const diameter: number = plan.diameter;
+  assert.equal(spots.length, 4, `cuatro caben en 100×100, fueron ${spots.length}`);
+  const section = slab.slice(20);
+  for (let i = 0; i < spots.length; i += 1) {
+    const [x, y] = spots[i]!;
+    // Cada uno con su pared: el taladro más 1 mm sigue dentro de la sección.
+    const probe = wasm.CrossSection.circle(diameter / 2 + 1, 48).translate([x, y]);
+    const overlap = probe.intersect(section);
+    assert.ok(Math.abs(overlap.area() - probe.area()) < 0.5, 'el conector y su pared caben en la sección');
+    for (let j = i + 1; j < spots.length; j += 1) {
+      const [ox, oy] = spots[j]!;
+      assert.ok(Math.hypot(x - ox, y - oy) >= diameter * 2 - 1e-6, 'separados al menos dos diámetros');
+    }
+  }
+  // Y repartidos, no amontonados: uno por cuadrante.
+  assert.equal(new Set(spots.map(([x, y]) => `${x > 50 ? 1 : 0}${y > 50 ? 1 : 0}`)).size, 4, 'uno por cuadrante');
+}
+
+// ---- pedir más de los que caben: salen los que encajan, y se sabe cuántos se pidieron ----
+{
+  // 20×20 con conectores de 6 a mano: entre dos centros hacen falta 12 mm y la
+  // zona útil mide 10,4, así que en cruz no caben; en diagonal, dos sí.
+  const bar = Manifold.cube([20, 20, 100], false);
+  const { plan, report } = planJoint(bar, 50, { ...auto, auto: false, count: 4 }, { above: 50, below: 50 });
+  assert.ok(plan);
+  assert.equal(report.requested, 4);
+  const spots: Array<[number, number]> = plan.spots;
+  const diameter: number = plan.diameter;
+  assert.ok(spots.length < 4, `en 20×20 no caben cuatro de 6 mm; salieron ${spots.length}`);
+  assert.ok(spots.length >= 1);
+  assert.equal(report.count, spots.length);
+  for (let i = 0; i < spots.length; i += 1) {
+    for (let j = i + 1; j < spots.length; j += 1) {
+      const [x, y] = spots[i]!;
+      const [ox, oy] = spots[j]!;
+      assert.ok(Math.hypot(x - ox, y - oy) >= diameter * 2 - 1e-6, 'los que salen mantienen la separación');
+    }
+  }
+}
+
+// ---- sección en dos trozos: uno en cada uno, o las mitades no quedan unidas ----
+{
+  const two = Manifold.cube([20, 20, 100], false).add(Manifold.cube([20, 20, 100], false).translate([60, 0, 0]));
+  const { plan } = planJoint(two, 50, auto, { above: 50, below: 50 });
+  assert.ok(plan);
+  const spots: Array<[number, number]> = plan.spots;
+  assert.equal(spots.length, 2, 'un conector por cada trozo de la sección');
+  const xs = spots.map(([x]) => x).sort((a, b) => a - b);
+  assert.ok(xs[0]! < 30 && xs[1]! > 50, `uno en cada trozo, fueron ${xs.map((x) => x.toFixed(1)).join(' y ')}`);
 }
 
 console.log('joints self-check ok');

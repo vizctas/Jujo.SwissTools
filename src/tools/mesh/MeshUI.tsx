@@ -10,15 +10,7 @@
  *  - la barra superior es la entrada del archivo y el sitio de los avisos.
  */
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type DragEvent,
-  type ReactNode,
-} from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from 'react';
 import { Button, Group, NumberSlider, Row, Segmented, SelectField, Toggle } from '../../components/controls.tsx';
 import {
   AlertIcon,
@@ -319,29 +311,40 @@ function Layers(): ReactNode {
   );
 }
 
-/* ------------------------------------------------------- Barra de corte */
+/* ------------------------------------------------------- Tarjeta de corte */
 
 /**
- * Vive sobre el lienzo, pegada al plano. Su posición la escribe el visor en cada
- * fotograma tocando el DOM: pasar por el estado de React a 60 fps sería tirar
- * renders a la basura. Por eso ni `hidden` ni `transform` se declaran en JSX.
+ * Acoplada al pie de la columna izquierda, no sobre la pieza: flotando sobre el
+ * modelo tapaba justo lo que se está mirando y estorbaba el arrastre. Quien
+ * señala dónde se corta es el plano, dibujado en la pieza; esto solo son los
+ * mandos.
  */
-function CutBar({ anchor }: { anchor: (node: HTMLDivElement | null) => void }): ReactNode {
+function CutCard(): ReactNode {
   const { cut, setCut, joint, setJoint, parts, selectedId, cutSelected, busy, engine } = useMesh();
   const selected = parts.find((part) => part.id === selectedId) ?? null;
+  if (!selected) return null;
+
   const working = busy !== null;
-  const blocked = !selected || working || engine.kind === 'failed' || !selected.topology.watertight;
+  const open = !selected.topology.watertight;
+  const blocked = working || engine.kind === 'failed' || open;
 
   return (
-    <div className="cut-bar" ref={anchor} role="toolbar" aria-label="Corte">
-      <Segmented label="Eje del corte" value={cut.axis} options={AXES} onChange={(axis) => setCut({ axis })} />
-      <span className="cut-pos value" aria-hidden="true">
-        {Math.round(cut.position * 100)} %
-      </span>
+    <section className="cut-card" aria-label="Corte">
+      <header className="cut-head">
+        <h2 className="cut-title">Corte</h2>
+        <span className="cut-target" title={selected.name}>
+          {selected.name}
+        </span>
+      </header>
+      <div className="cut-row">
+        <Segmented label="Eje del corte" value={cut.axis} options={AXES} onChange={(axis) => setCut({ axis })} />
+        <span className="cut-pos value">{Math.round(cut.position * 100)} %</span>
+      </div>
       {joint.enabled ? (
         <Segmented
           label="Sección del conector"
           value={joint.shape}
+          columns={5}
           options={SHAPE_OPTIONS}
           onChange={(shape) => setJoint({ shape })}
         />
@@ -350,16 +353,13 @@ function CutBar({ anchor }: { anchor: (node: HTMLDivElement | null) => void }): 
         variant="primary"
         disabled={blocked}
         loading={working && busy === 'Cortando…'}
-        title={
-          selected && !selected.topology.watertight
-            ? 'La pieza no está cerrada: repárala en el panel antes de cortar'
-            : 'Cortar por el plano'
-        }
+        title={open ? 'La pieza no está cerrada: repárala en el panel antes de cortar' : 'Cortar por el plano'}
         onClick={() => void cutSelected()}
       >
         Cortar
       </Button>
-    </div>
+      {open ? <p className="cut-warn">Sin cerrar: repárala antes.</p> : null}
+    </section>
   );
 }
 
@@ -368,8 +368,6 @@ function CutBar({ anchor }: { anchor: (node: HTMLDivElement | null) => void }): 
 export function MeshStage(): ReactNode {
   const { parts, selectedId, select, exploded, setExploded, spread, setSpread, cut, setCut, volume } = useMesh();
   const [showVolume, setShowVolume] = useState(false);
-  const bar = useRef<HTMLDivElement | null>(null);
-
   // «E» separa y reúne; solo cuando el foco no está escribiendo en ningún sitio.
   useEffect(() => {
     if (parts.length === 0) return;
@@ -385,29 +383,6 @@ export function MeshStage(): ReactNode {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [parts.length, exploded, setExploded]);
-
-  const attachBar = useCallback((node: HTMLDivElement | null) => {
-    bar.current = node;
-    if (node) node.hidden = true;
-  }, []);
-
-  const placeBar = useCallback((screen: { x: number; y: number } | null) => {
-    const node = bar.current;
-    if (!node) return;
-    if (!screen) {
-      node.hidden = true;
-      return;
-    }
-    const host = node.parentElement;
-    const width = host?.clientWidth ?? 0;
-    const height = host?.clientHeight ?? 0;
-    // Que no se salga de la mesa aunque el plano quede en un borde.
-    const half = node.offsetWidth / 2 + 8;
-    const x = Math.min(Math.max(screen.x, half), Math.max(half, width - half));
-    const y = Math.min(Math.max(screen.y, node.offsetHeight + 24), Math.max(0, height - 8));
-    node.hidden = false;
-    node.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0) translate(-50%, -100%) translateY(-16px)`;
-  }, []);
 
   if (parts.length === 0) {
     return (
@@ -435,12 +410,14 @@ export function MeshStage(): ReactNode {
         spread={spread}
         cut={selectedId ? cut : null}
         onCutPosition={(position) => setCut({ position })}
-        onCutAnchor={placeBar}
         volume={volume}
         showVolume={showVolume}
       />
 
-      <Layers />
+      <div className="mesh-tools">
+        <Layers />
+        <CutCard />
+      </div>
 
       <div className="mesh-hud" role="toolbar" aria-label="Vista">
         <button
@@ -454,17 +431,18 @@ export function MeshStage(): ReactNode {
           {exploded ? 'Reunir' : 'Separar'}
         </button>
         {exploded ? (
-          <label className="hud-range" title="Apertura entre las piezas de un mismo objeto">
-            <span className="visually-hidden">Espaciado</span>
+          <label className="hud-range" title="Cuánto se abren entre sí las piezas de un mismo objeto">
+            <span className="hud-range-label">Separación</span>
             <input
               type="range"
-              min={0}
-              max={2}
-              step={0.05}
+              min={0.2}
+              max={4}
+              step={0.1}
               value={spread}
-              aria-label="Espaciado entre piezas"
+              aria-label="Separación entre piezas"
               onChange={(event) => setSpread(Number(event.target.value))}
             />
+            <span className="value hud-range-value">{spread.toFixed(1)}×</span>
           </label>
         ) : null}
         <button
@@ -478,8 +456,6 @@ export function MeshStage(): ReactNode {
           Impresora
         </button>
       </div>
-
-      <CutBar anchor={attachBar} />
 
       <p className="mesh-legend row-hint">
         Arrastra el fondo para girar · clic en una pieza para elegirla · arrástrala para moverla, y
@@ -696,17 +672,36 @@ export function MeshPanel(): ReactNode {
             <p className="row-hint">
               {shape?.label}: {shape?.hint} {JOINT_MODES.find((m) => m.value === joint.mode)?.hint}
             </p>
+            <Row label="Cantidad" wide>
+              <Segmented
+                label="Conectores por corte"
+                value={String(joint.count)}
+                columns={5}
+                options={[
+                  { value: '0', label: 'Auto' },
+                  { value: '1', label: '1' },
+                  { value: '2', label: '2' },
+                  { value: '3', label: '3' },
+                  { value: '4', label: '4' },
+                ]}
+                onChange={(value) => setJoint({ count: Number(value) })}
+              />
+            </Row>
+            <p className="row-hint">
+              Se reparten por la sección lo más lejos posible unos de otros, que es lo que impide
+              que las mitades giren. Salen solo los que quepan con pared entre ellos y el borde: si
+              pides cuatro y caben dos, salen dos y se avisa.
+            </p>
             <Toggle
               label="Tamaño automático"
               checked={joint.auto}
-              hint="Diámetro ≈ 40 % del mayor círculo que cabe en la sección, entre 2 y 12 mm. Profundidad 1,6 diámetros, sin pasar del 45 % de cada mitad. Uno o dos por corte según el espacio."
+              hint="Diámetro ≈ 40 % del mayor círculo que cabe en la sección, entre 2 y 12 mm. Profundidad 1,6 diámetros, sin pasar del 45 % de cada mitad."
               onChange={(auto) => setJoint({ auto })}
             />
             {!joint.auto ? (
               <>
                 <NumberSlider label="Diámetro" value={joint.diameter} min={2} max={20} step={0.5} decimals={1} unit="mm" onChange={(diameter) => setJoint({ diameter })} />
                 <NumberSlider label="Profundidad" value={joint.depth} min={3} max={40} step={1} unit="mm" onChange={(depth) => setJoint({ depth })} />
-                <NumberSlider label="Cantidad" value={joint.count} min={0} max={4} step={1} unit={joint.count === 0 ? 'auto' : ''} onChange={(count) => setJoint({ count })} />
                 <p className="row-hint">
                   Si el conector pedido no deja pared suficiente, se encoge hasta que quepa y se avisa.
                 </p>
