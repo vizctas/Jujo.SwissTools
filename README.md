@@ -210,6 +210,32 @@ animation), and cut. "Cut to fit" does this automatically along the mid-planes
 until every piece fits the build volume you set. A flat base can be fused under any
 piece for figures with small feet.
 
+**It finds the parts that come off.** Sweep the piece along all three axes and a
+limb announces itself the same way every time: the cross-section narrows sharply
+and what lies past the narrowing is small. A shoulder, a wrist, the rim of an eye
+sitting on a face. The tool reports each neck it finds with the volume that would
+come away and the area it is attached by, and clicking one sets up the cut — axis,
+position and window — for you to look over before anything is cut. A cube or a
+sphere proposes nothing, and halving a model is not a limb: both are guarded by the
+self-check, because a detector that invents cuts is worse than none.
+
+**A cut with a size.** A plane through the whole model is the wrong tool for
+separating an arm when something else crosses the same plane behind it. Switch the
+cut to a window and only what falls inside the box is separated; the rest of the
+model never learns a cut happened. The box is measured on all three axes — width
+and height across the plane, and a depth along the cut itself, which is what keeps
+a cut through a paw from taking the whole corridor behind it — and it is placed by
+dragging it on the piece or by typing millimetres. It is drawn as a wireframe box
+on the model, because "to the end of the piece" and "just this much" look far too
+alike until you can see where the cut stops. The connector is then sized to that
+window rather than to the whole cross-section.
+
+**Three ways to aim it, because dragging a small rectangle is not one of them.**
+Type the millimetres, or turn on the crosshair and click the model where the cut
+should go, or press M and then X, Y or Z to slide it along one locked axis with
+the mouse — Enter or a click confirms, Esc puts it back where it was. All three
+drive the same thing: a point on the model and the axis you are cutting along.
+
 **Connectors sized by the cut, not by the part.** The connector is dimensioned on
 the actual cross-section the plane passes through: its diameter is a fraction of the
 largest circle that fits inside that section (clamped to 2–12 mm), its depth is
