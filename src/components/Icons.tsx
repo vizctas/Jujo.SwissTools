@@ -65,6 +65,13 @@ export const ChevronIcon = (props: IconProps): ReactNode => (
   </Icon>
 );
 
+export const TargetIcon = (props: IconProps): ReactNode => (
+  <Icon {...props}>
+    <circle cx="8" cy="8" r="4.2" />
+    <path d="M8 1.4v2.2M8 12.4v2.2M1.4 8h2.2M12.4 8h2.2" />
+  </Icon>
+);
+
 export const SearchIcon = (props: IconProps): ReactNode => (
   <Icon {...props}>
     <circle cx="7.2" cy="7.2" r="4.4" />

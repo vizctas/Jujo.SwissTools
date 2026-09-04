@@ -196,6 +196,8 @@ export function planJoint(
   height: number,
   spec: JointSpec,
   thickness: { above: number; below: number },
+  /** Con recorte, la cara de unión es solo la parte de la sección que se corta. */
+  limit: CS | null = null,
 ): { plan: JointPlan | null; report: JointReport } {
   const requested = spec.count > 0 ? spec.count : 0;
   const report = (plan: JointPlan | null, skipped: string | null): { plan: JointPlan | null; report: JointReport } => ({
@@ -211,7 +213,8 @@ export function planJoint(
     },
   });
 
-  const section = aligned.slice(height);
+  const full = aligned.slice(height);
+  const section = limit ? full.intersect(limit) : full;
   try {
     if (section.isEmpty()) return report(null, 'el plano no atraviesa material');
 
@@ -246,8 +249,39 @@ export function planJoint(
       usable.delete();
     }
   } finally {
-    section.delete();
+    if (section !== full) section.delete();
+    full.delete();
   }
+}
+
+/**
+ * Columna de recorte: la caja que, cruzada con la pieza, deja solo lo que el
+ * corte debe separar. Nace en el plano y se va hacia +normal más allá de la
+ * pieza, así que lo que quede al otro lado no se toca.
+ *
+ * En coordenadas del mundo, con la normal sobre un eje. Quien la use la gira al
+ * marco alineado con el mismo `frame` que la pieza, para no derivar a mano a qué
+ * eje va a parar cada lado.
+ */
+export function windowColumn(
+  wasm: Wasm,
+  normal: Vec3,
+  offset: number,
+  window: { center: [number, number]; size: [number, number]; side: 1 | -1 },
+  reach: number,
+): M | null {
+  const axis = normal.findIndex((n) => Math.abs(n) > 0.999);
+  if (axis < 0) return null;
+  const others = [0, 1, 2].filter((i) => i !== axis);
+  const size: Vec3 = [0, 0, 0];
+  const center: Vec3 = [0, 0, 0];
+  size[axis] = reach;
+  center[axis] = offset + (window.side * reach) / 2;
+  size[others[0]!] = Math.max(0.01, window.size[0]);
+  size[others[1]!] = Math.max(0.01, window.size[1]);
+  center[others[0]!] = window.center[0];
+  center[others[1]!] = window.center[1];
+  return wasm.Manifold.cube(size, true).translate(center);
 }
 
 /* ------------------------------------------------------------------ Formas */

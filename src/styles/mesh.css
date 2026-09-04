@@ -430,6 +430,56 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.cut-aim {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  margin-inline-start: auto;
+  color: var(--muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.cut-aim:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+.cut-aim.is-on {
+  color: var(--primary-ink);
+  background: var(--primary-soft);
+  border-color: var(--primary-edge);
+}
+.cut-aim:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Un modo activo se anuncia: sin esto, «M» deja el puntero haciendo cosas raras
+   sin decir por qué. */
+.mesh-mode {
+  position: absolute;
+  inset-block-start: var(--space-4);
+  inset-inline: 0;
+  z-index: 2;
+  width: max-content;
+  max-width: calc(100% - var(--space-8));
+  margin-inline: auto;
+  padding: var(--space-2) var(--space-5);
+  font-size: var(--text-sm);
+  color: var(--primary-ink);
+  background: var(--surface);
+  border: 1px solid var(--primary-edge);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-float);
+  pointer-events: none;
+}
+
 .cut-row {
   display: flex;
   align-items: center;
@@ -452,6 +502,50 @@
 .cut-warn {
   font-size: var(--text-xs);
   color: var(--warning);
+}
+
+/* Propuestas de corte: una fila por parte que se desprende. */
+.loose-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.loose {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: var(--space-3) var(--space-4);
+  font: inherit;
+  color: var(--ink);
+  text-align: start;
+  background: var(--surface-sunken);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.loose:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary-edge);
+}
+.loose:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+.loose-name {
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+.loose-meta {
+  font-size: var(--text-xs);
+  color: var(--muted);
 }
 
 .mesh-buttons {
@@ -510,6 +604,10 @@
   }
   .cut-card .segment {
     min-height: 40px;
+  }
+  .cut-aim {
+    width: 44px;
+    height: 44px;
   }
   .cut-card .btn {
     min-height: 44px;

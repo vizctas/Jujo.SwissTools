@@ -11,7 +11,8 @@
  * repara antes, en el hilo principal, con la geometría pura.
  */
 
-import { applyJoint, frame, planJoint } from './joints.ts';
+import { findAppendages } from './appendages.ts';
+import { applyJoint, frame, planJoint, windowColumn } from './joints.ts';
 import type { JointReport, JointSpec, MeshWorkerRequest, MeshWorkerResponse, Plane, WireMesh } from './protocol.ts';
 
 type ManifoldModule = Awaited<ReturnType<typeof import('manifold-3d').default>>;
@@ -100,15 +101,38 @@ interface CutResult {
  */
 function cutOnce(manifold: ManifoldInstance, plane: Plane, joint: JointSpec | null): CutResult {
   if (!wasm) throw new Error('Manifold no está cargado.');
+  const worldBox = manifold.boundingBox();
   const { forward, back } = frame(plane.normal);
   const aligned = forward(manifold);
   manifold.delete();
 
-  const [above, below] = aligned.splitByPlane([0, 0, 1], plane.offset);
+  // Con recorte, en vez de partir por un plano infinito se cruza con una columna
+  // que nace en el plano: fuera de ella la pieza no se entera del corte.
+  let column: ManifoldInstance | null = null;
+  if (plane.window) {
+    const span = Math.max(
+      worldBox.max[0] - worldBox.min[0],
+      worldBox.max[1] - worldBox.min[1],
+      worldBox.max[2] - worldBox.min[2],
+    );
+    // Sin profundidad, la columna atraviesa la pieza entera; con ella, se queda
+    // en la caja pedida y lo que hay más allá no se toca.
+    const reach = plane.window.depth ?? span * 2 + 100;
+    const world = windowColumn(wasm, plane.normal, plane.offset, plane.window, reach);
+    if (world) {
+      column = forward(world);
+      world.delete();
+    }
+  }
+
+  const [above, below] = column
+    ? [aligned.intersect(column), aligned.subtract(column)]
+    : aligned.splitByPlane([0, 0, 1], plane.offset);
   if (above.isEmpty() || below.isEmpty()) {
-    // El plano no atraviesa la pieza: no hay corte que hacer.
+    // Ni el plano ni la ventana alcanzan material a los dos lados: no hay corte.
     above.delete();
     below.delete();
+    column?.delete();
     const restored = back(aligned);
     aligned.delete();
     return { pieces: [restored], pins: [], joints: [] };
@@ -117,14 +141,23 @@ function cutOnce(manifold: ManifoldInstance, plane: Plane, joint: JointSpec | nu
   let result = { above, below, pins: [] as ManifoldInstance[] };
   const joints: JointReport[] = [];
   if (joint) {
+    // El trozo separado puede quedar a cualquier lado del plano: se mide desde el
+    // plano hacia donde esté, o una unión en el lado negativo saldría de 0 mm.
+    const side = plane.window?.side ?? 1;
+    const chunk = above.boundingBox();
+    const rest = below.boundingBox();
     const thickness = {
-      above: above.boundingBox().max[2] - plane.offset,
-      below: plane.offset - below.boundingBox().min[2],
+      above: side > 0 ? chunk.max[2] - plane.offset : plane.offset - chunk.min[2],
+      below: side > 0 ? plane.offset - rest.min[2] : rest.max[2] - plane.offset,
     };
-    const { plan, report } = planJoint(aligned, plane.offset, joint, thickness);
+    // La cara de unión es la sección dentro de la ventana, no la sección entera.
+    const limit = column ? column.slice(plane.offset + side * 0.01) : null;
+    const { plan, report } = planJoint(aligned, plane.offset, joint, thickness, limit);
+    limit?.delete();
     joints.push(report);
     if (plan) result = applyJoint(wasm, above, below, plane.offset, plan, joint.clearance);
   }
+  column?.delete();
   aligned.delete();
 
   const restore = (m: ManifoldInstance): ManifoldInstance => {
@@ -245,6 +278,13 @@ async function handle(message: MeshWorkerRequest): Promise<void> {
       case 'autosplit':
         postPieces(message.id, autosplit(toManifold(message.mesh), message.volume, message.joint));
         break;
+      case 'appendages': {
+        const m = toManifold(message.mesh);
+        const found = findAppendages(wasm!, m);
+        m.delete();
+        post({ t: 'appendages', id: message.id, found });
+        break;
+      }
       case 'base': {
         const joined = withBase(toManifold(message.mesh), message.height, message.margin);
         const wire = toWire(joined);

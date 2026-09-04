@@ -41,6 +41,8 @@ import {
 import { LoadError, loadModel, type ColorSource } from './load.ts';
 import { PRINTERS, type Vec3 } from './printers.ts';
 import type {
+  Appendage,
+  CutWindow,
   JointMode,
   JointReport,
   JointShape,
@@ -94,6 +96,30 @@ export interface CutState {
   axis: Axis;
   /** Fracción 0–1 a lo largo de la caja de la pieza. */
   position: number;
+  /**
+   * Recorte: el rectángulo sobre el plano dentro del cual se corta, en los dos
+   * ejes distintos al del corte. `null` = el plano entero, que parte todo lo que
+   * cruza. Con ventana se separa un brazo sin tocar lo que haya detrás.
+   */
+  window: CutWindow | null;
+}
+
+/** Los dos ejes del mundo que no son el del corte, en orden ascendente. */
+export function crossAxes(axis: Axis): [number, number] {
+  const cut = AXIS_INDEX[axis];
+  const rest = [0, 1, 2].filter((i) => i !== cut);
+  return [rest[0]!, rest[1]!];
+}
+
+/** Ventana de partida: medio ancho de la pieza, centrada en ella. */
+function defaultWindow(part: Part, axis: Axis): CutWindow {
+  const [i, j] = crossAxes(axis);
+  return {
+    center: [part.bounds.center[i]!, part.bounds.center[j]!],
+    size: [Math.max(1, part.bounds.size[i]! * 0.5), Math.max(1, part.bounds.size[j]! * 0.5)],
+    side: 1,
+    depth: null,
+  };
 }
 export interface JointState extends JointSpec {
   enabled: boolean;
@@ -167,6 +193,19 @@ interface MeshStore {
   fits: (part: Part) => boolean;
   cut: CutState;
   setCut: (patch: Partial<CutState>) => void;
+  /** Enciende o apaga el recorte, estrenándolo sobre la pieza elegida. */
+  setCutWindow: (on: boolean) => void;
+  /**
+   * Lleva el corte a un punto del modelo: la posición sobre su eje y, si hay
+   * recorte, el centro de la ventana. Es lo que hacen el clic para colocar y el
+   * movimiento con eje bloqueado, que por dentro son el mismo gesto.
+   */
+  placeCut: (point: Vec3, partId: string) => void;
+  /** Cuellos encontrados en la pieza elegida: propuestas de corte, no cortes. */
+  appendages: Appendage[];
+  findAppendages: () => Promise<void>;
+  /** Coloca el corte sobre una de las propuestas, para revisarla antes de cortar. */
+  useAppendage: (index: number) => void;
   joint: JointState;
   setJoint: (patch: Partial<JointState>) => void;
   base: BaseState;
@@ -331,7 +370,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [volume, setVolumeState] = useState<Vec3>(readVolume);
-  const [cut, setCutState] = useState<CutState>({ axis: 'z', position: 0.5 });
+  const [cut, setCutState] = useState<CutState>({ axis: 'z', position: 0.5, window: null });
   const [joint, setJointState] = useState<JointState>({
     enabled: true,
     mode: 'dowel',
@@ -343,6 +382,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
     count: 0,
   });
   const [base, setBaseState] = useState<BaseState>({ height: 3, margin: 5 });
+  const [appendages, setAppendages] = useState<Appendage[]>([]);
   const [exploded, setExploded] = useState(false);
   const [spread, setSpread] = useState(1);
   const [format, setFormat] = useState<ExportFormat>('stl');
@@ -599,7 +639,11 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
     const axis = AXIS_INDEX[state.axis];
     const normal: Vec3 = [0, 0, 0];
     normal[axis] = 1;
-    return { normal, offset: part.bounds.min[axis]! + state.position * part.bounds.size[axis]! };
+    return {
+      normal,
+      offset: part.bounds.min[axis]! + state.position * part.bounds.size[axis]!,
+      window: state.window,
+    };
   };
 
   const jointSpec = (): JointSpec | null => {
@@ -697,6 +741,52 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
     }
   }, [fits, volume, joint, request, replace]);
 
+  /**
+   * Busca cuellos en la pieza elegida. No corta: propone, con la ventana ya
+   * medida, y quien mira la pieza decide. Una detección que además cortara sola
+   * sería imposible de revisar.
+   */
+  const findAppendages = useCallback(async () => {
+    const part = partsRef.current.find((candidate) => candidate.id === selectedId);
+    if (!part) return;
+    setBusy('Buscando partes que se desprenden…');
+    setError(null);
+    try {
+      const reply = await request({ t: 'appendages', id: crypto.randomUUID(), mesh: wire(part.mesh) });
+      if (reply.t === 'failed') {
+        setError(reply.message);
+        return;
+      }
+      if (reply.t !== 'appendages') return;
+      setAppendages(reply.found);
+      setNotice(
+        reply.found.length === 0
+          ? 'No se ve ningún cuello por donde desprender una parte. Si sabes dónde va el corte, colócalo a mano con el recorte.'
+          : `${reply.found.length} ${reply.found.length === 1 ? 'parte que se desprende' : 'partes que se desprenden'}. Elige una para colocar el corte y revísalo antes de cortar.`,
+      );
+    } finally {
+      setBusy(null);
+    }
+  }, [selectedId, request]);
+
+  const useAppendage = useCallback(
+    (index: number) => {
+      const found = appendages[index];
+      const part = partsRef.current.find((candidate) => candidate.id === selectedId);
+      if (!found || !part) return;
+      const span = part.bounds.size[found.axis]!;
+      setCutState({
+        axis: (['x', 'y', 'z'] as Axis[])[found.axis]!,
+        position: span > 0 ? Math.min(1, Math.max(0, (found.offset - part.bounds.min[found.axis]!) / span)) : 0.5,
+        window: found.window,
+      });
+    },
+    [appendages, selectedId],
+  );
+
+  // Las propuestas hablan de una pieza concreta: al cambiar de pieza, caducan.
+  useEffect(() => setAppendages([]), [selectedId]);
+
   const addBase = useCallback(async () => {
     const part = partsRef.current.find((candidate) => candidate.id === selectedId);
     if (!part) return;
@@ -768,7 +858,15 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
       model,
       parts,
       selectedId,
-      select: setSelectedId,
+      select: (id) => {
+        setSelectedId(id);
+        // La ventana hablaba de dónde estaba la pieza anterior: se reestrena.
+        setCutState((current) => {
+          if (!current.window || !id) return current;
+          const part = partsRef.current.find((candidate) => candidate.id === id);
+          return part ? { ...current, window: defaultWindow(part, current.axis) } : current;
+        });
+      },
       load,
       clear: () => {
         setModel(null);
@@ -808,7 +906,40 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
       },
       fits,
       cut,
-      setCut: (changes) => setCutState((current) => ({ ...current, ...changes })),
+      setCut: (changes) =>
+        setCutState((current) => {
+          const next = { ...current, ...changes };
+          // Al cambiar de eje, la ventana vieja hablaba de otros dos ejes.
+          if (changes.axis && changes.axis !== current.axis && next.window) {
+            const part = partsRef.current.find((candidate) => candidate.id === selectedId);
+            next.window = part ? defaultWindow(part, next.axis) : null;
+          }
+          return next;
+        }),
+      placeCut: (point, partId) => {
+        const part = partsRef.current.find((candidate) => candidate.id === partId);
+        if (!part) return;
+        // Sin pasar por `select`: ese reestrena la ventana, y aquí el sitio lo
+        // manda el punto, no el centro de la pieza.
+        setSelectedId(partId);
+        setCutState((current) => {
+          const axis = AXIS_INDEX[current.axis];
+          const span = part.bounds.size[axis]!;
+          const [i, j] = crossAxes(current.axis);
+          return {
+            ...current,
+            position: span > 0 ? Math.min(1, Math.max(0, (point[axis]! - part.bounds.min[axis]!) / span)) : 0.5,
+            window: current.window ? { ...current.window, center: [point[i]!, point[j]!] } : null,
+          };
+        });
+      },
+      setCutWindow: (on) => {
+        const part = partsRef.current.find((candidate) => candidate.id === selectedId);
+        setCutState((current) => ({
+          ...current,
+          window: on && part ? defaultWindow(part, current.axis) : null,
+        }));
+      },
       joint,
       setJoint: (changes) => setJointState((current) => ({ ...current, ...changes })),
       base,
@@ -817,6 +948,9 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
       cutSelected,
       autosplit,
       addBase,
+      appendages,
+      findAppendages,
+      useAppendage,
 
       exploded,
       setExploded,
@@ -832,7 +966,8 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
     [
       model, parts, selectedId, load, patch, engine, busy, error, notice,
       detectObjects, separateByColor, repair, volume, fits, cut, joint, base,
-      cutSelected, autosplit, addBase, exploded, spread, format, exportPart, exportAll, exporting,
+      cutSelected, autosplit, addBase, appendages, findAppendages, useAppendage,
+      exploded, spread, format, exportPart, exportAll, exporting,
     ],
   );
 

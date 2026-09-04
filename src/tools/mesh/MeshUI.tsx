@@ -21,13 +21,14 @@ import {
   DownloadIcon,
   GridIcon,
   InfoIcon,
+  TargetIcon,
   TrashIcon,
   UploadIcon,
 } from '../../components/Icons.tsx';
 import type { ColorSource } from './load.ts';
 import { PRINTERS, type Vec3 } from './printers.ts';
 import type { JointShape } from './protocol.ts';
-import { JOINT_MODES, JOINT_SHAPES, rgbToHex, useMesh, type Part } from './store.tsx';
+import { crossAxes, JOINT_MODES, JOINT_SHAPES, rgbToHex, useMesh, type Part } from './store.tsx';
 import { Viewport } from './Viewport.tsx';
 
 const COLOR_SOURCE: Record<ColorSource, string> = {
@@ -42,6 +43,16 @@ const AXES = [
   { value: 'y' as const, label: 'Y' },
   { value: 'z' as const, label: 'Z' },
 ];
+
+const REACH = [
+  { value: 'all' as const, label: 'Todo' },
+  { value: 'window' as const, label: 'Recorte' },
+];
+
+/** Cómo se llama cada eje del mundo en los mandos: igual que en la impresora. */
+const AXIS_NAMES = ['Ancho (X)', 'Fondo (Y)', 'Alto (Z)'];
+const AXIS_LETTERS = ['X', 'Y', 'Z'];
+const AXIS_OF: Record<'x' | 'y' | 'z', number> = { x: 0, y: 1, z: 2 };
 
 const mm = (value: number): string => (Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1));
 const cm3 = (mm3: number): string => {
@@ -319,8 +330,8 @@ function Layers(): ReactNode {
  * señala dónde se corta es el plano, dibujado en la pieza; esto solo son los
  * mandos.
  */
-function CutCard(): ReactNode {
-  const { cut, setCut, joint, setJoint, parts, selectedId, cutSelected, busy, engine } = useMesh();
+function CutCard({ placing, onPlacing }: { placing: boolean; onPlacing: (on: boolean) => void }): ReactNode {
+  const { cut, setCut, setCutWindow, joint, setJoint, parts, selectedId, cutSelected, busy, engine } = useMesh();
   const selected = parts.find((part) => part.id === selectedId) ?? null;
   if (!selected) return null;
 
@@ -335,11 +346,28 @@ function CutCard(): ReactNode {
         <span className="cut-target" title={selected.name}>
           {selected.name}
         </span>
+        <button
+          type="button"
+          className={`cut-aim${placing ? ' is-on' : ''}`}
+          aria-pressed={placing}
+          title="Colocar el corte con un clic sobre la pieza"
+          onClick={() => onPlacing(!placing)}
+        >
+          <TargetIcon />
+          <span className="visually-hidden">Colocar el corte apuntando</span>
+        </button>
       </header>
       <div className="cut-row">
         <Segmented label="Eje del corte" value={cut.axis} options={AXES} onChange={(axis) => setCut({ axis })} />
         <span className="cut-pos value">{Math.round(cut.position * 100)} %</span>
       </div>
+      <Segmented
+        label="Alcance del corte"
+        value={cut.window ? 'window' : 'all'}
+        columns={2}
+        options={REACH}
+        onChange={(value) => setCutWindow(value === 'window')}
+      />
       {joint.enabled ? (
         <Segmented
           label="Sección del conector"
@@ -366,8 +394,11 @@ function CutCard(): ReactNode {
 /* --------------------------------------------------------------------- Escena */
 
 export function MeshStage(): ReactNode {
-  const { parts, selectedId, select, exploded, setExploded, spread, setSpread, cut, setCut, volume } = useMesh();
+  const { parts, selectedId, select, exploded, setExploded, spread, setSpread, cut, setCut, placeCut, volume } =
+    useMesh();
   const [showVolume, setShowVolume] = useState(false);
+  const [placing, setPlacing] = useState(false);
+  const [moving, setMoving] = useState<{ active: boolean; axis: number | null }>({ active: false, axis: null });
   // «E» separa y reúne; solo cuando el foco no está escribiendo en ningún sitio.
   useEffect(() => {
     if (parts.length === 0) return;
@@ -410,13 +441,29 @@ export function MeshStage(): ReactNode {
         spread={spread}
         cut={selectedId ? cut : null}
         onCutPosition={(position) => setCut({ position })}
+        onCutWindow={(center) => setCut({ window: cut.window ? { ...cut.window, center } : null })}
+        placing={placing}
+        onCutPoint={placeCut}
+        onMoveMode={setMoving}
         volume={volume}
         showVolume={showVolume}
       />
 
       <div className="mesh-tools">
         <Layers />
-        <CutCard />
+        <CutCard placing={placing} onPlacing={setPlacing} />
+
+      {moving.active ? (
+        <p className="mesh-mode" role="status">
+          {moving.axis === null
+            ? 'Moviendo el corte: pulsa X, Y o Z para fijar el eje'
+            : `Moviendo en ${AXIS_LETTERS[moving.axis]} · Enter o clic confirma · Esc lo deja donde estaba`}
+        </p>
+      ) : placing ? (
+        <p className="mesh-mode" role="status">
+          Clic sobre la pieza para llevar el corte ahí
+        </p>
+      ) : null}
       </div>
 
       <div className="mesh-hud" role="toolbar" aria-label="Vista">
@@ -458,8 +505,9 @@ export function MeshStage(): ReactNode {
       </div>
 
       <p className="mesh-legend row-hint">
-        Arrastra el fondo para girar · clic en una pieza para elegirla · arrástrala para moverla, y
-        cae sobre lo que la sostenga{selectedId ? ' · arrastra el plano para mover el corte' : ''}
+        Arrastra el fondo para girar · clic en una pieza para elegirla · arrástrala para moverla, y cae
+        sobre lo que la sostenga
+        {selectedId ? ' · para colocar el corte: apunta y haz clic, o pulsa M y luego X, Y o Z' : ''}
       </p>
     </div>
   );
@@ -473,7 +521,8 @@ export function MeshPanel(): ReactNode {
   const {
     model, parts, selectedId, engine, busy,
     detectObjects, separateByColor, repair,
-    volume, setVolume, fits, cut, setCut, joint, setJoint, base, setBase,
+    volume, setVolume, fits, cut, setCut, setCutWindow, joint, setJoint, base, setBase,
+    appendages, findAppendages, useAppendage,
     cutSelected, autosplit, addBase,
     format, setFormat, exportAll, exporting,
   } = useMesh();
@@ -622,6 +671,38 @@ export function MeshPanel(): ReactNode {
           El eje, la sección y el botón de cortar también están sobre la pieza, en la mesa. Aquí
           queda lo que no se toca en cada corte.
         </p>
+
+        <Button
+          variant="default"
+          disabled={!selected || working || engineDown}
+          loading={working && busy?.startsWith('Buscando') === true}
+          onClick={() => void findAppendages()}
+        >
+          Buscar partes que se desprenden
+        </Button>
+        <p className="row-hint">
+          Barre la pieza en los tres ejes buscando cuellos: sitios donde la sección se estrecha de
+          golpe y lo que queda más allá es poco. Un hombro, una muñeca, el borde de un ojo pegado a
+          la cara. Propone dónde cortar y con qué ventana; cortar lo sigues decidiendo tú.
+        </p>
+        {appendages.length > 0 ? (
+          <ul className="loose-list">
+            {appendages.map((found, index) => (
+              <li key={`${found.axis}-${found.side}-${found.offset.toFixed(2)}`}>
+                <button type="button" className="loose" onClick={() => useAppendage(index)}>
+                  <span className="loose-name">
+                    Sale por {AXIS_LETTERS[found.axis]}
+                    {found.side > 0 ? '+' : '−'} en {mm(found.offset)} mm
+                  </span>
+                  <span className="loose-meta value">
+                    {cm3(found.volume)} cm³ · pegada por {found.area.toFixed(0)} mm² ·{' '}
+                    {mm(found.window.size[0])}×{mm(found.window.size[1])} mm
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <Row label="Eje" wide>
           <Segmented
             label="Eje del corte"
@@ -643,6 +724,86 @@ export function MeshPanel(): ReactNode {
           disabled={!selected}
           disabledReason="Elige una pieza en la lista o en la mesa."
         />
+        <Row label="Alcance" wide>
+          <Segmented
+            label="Alcance del corte"
+            value={cut.window ? 'window' : 'all'}
+            columns={2}
+            options={REACH}
+            onChange={(value) => setCutWindow(value === 'window')}
+          />
+        </Row>
+        <p className="row-hint">
+          El plano entero parte todo lo que cruza. Con recorte solo se corta lo que cae dentro del
+          rectángulo: separa un brazo sin tocar lo que haya detrás. Se coloca arrastrándolo sobre la
+          pieza o con los números de aquí abajo; la posición a lo largo del eje sigue en el mando de
+          arriba.
+        </p>
+        {cut.window && selected ? (
+          <>
+            <Row label="Se separa" wide>
+              <Segmented
+                label="Lado que se separa"
+                value={cut.window.side > 0 ? 'plus' : 'minus'}
+                columns={2}
+                options={[
+                  { value: 'minus' as const, label: `Hacia −${AXIS_LETTERS[AXIS_OF[cut.axis]]}` },
+                  { value: 'plus' as const, label: `Hacia +${AXIS_LETTERS[AXIS_OF[cut.axis]]}` },
+                ]}
+                onChange={(value) => setCut({ window: { ...cut.window!, side: value === 'plus' ? 1 : -1 } })}
+              />
+            </Row>
+            <NumberSlider
+              label={`Profundidad (${AXIS_LETTERS[AXIS_OF[cut.axis]]})`}
+              value={cut.window.depth ?? Math.ceil(selected.bounds.size[AXIS_OF[cut.axis]]!)}
+              min={1}
+              max={Math.ceil(selected.bounds.size[AXIS_OF[cut.axis]]!)}
+              step={1}
+              unit="mm"
+              onChange={(value) => {
+                const full = Math.ceil(selected.bounds.size[AXIS_OF[cut.axis]]!);
+                setCut({ window: { ...cut.window!, depth: value >= full ? null : value } });
+              }}
+            />
+            <p className="row-hint">
+              {cut.window.depth === null
+                ? 'Al máximo, el recorte llega hasta el final de la pieza: eso separa una extremidad entera. Bájalo para llevarte solo un trozo, como media pata.'
+                : `Se lleva solo los ${cut.window.depth} mm que siguen al plano; lo que haya más allá se queda.`}
+            </p>
+          </>
+        ) : null}
+        {cut.window && selected
+          ? crossAxes(cut.axis).flatMap((worldAxis, i) => [
+              <NumberSlider
+                key={`size-${worldAxis}`}
+                label={AXIS_NAMES[worldAxis]!}
+                value={cut.window!.size[i]!}
+                min={1}
+                max={Math.max(10, Math.ceil(selected.bounds.size[worldAxis]! * 1.5))}
+                step={1}
+                unit="mm"
+                onChange={(value) => {
+                  const size: [number, number] = [...cut.window!.size];
+                  size[i] = value;
+                  setCut({ window: { ...cut.window!, size } });
+                }}
+              />,
+              <NumberSlider
+                key={`center-${worldAxis}`}
+                label={`Centro ${AXIS_LETTERS[worldAxis]}`}
+                value={cut.window!.center[i]!}
+                min={Math.floor(selected.bounds.min[worldAxis]!)}
+                max={Math.ceil(selected.bounds.max[worldAxis]!)}
+                step={1}
+                unit="mm"
+                onChange={(value) => {
+                  const center: [number, number] = [...cut.window!.center];
+                  center[i] = value;
+                  setCut({ window: { ...cut.window!, center } });
+                }}
+              />,
+            ])
+          : null}
         <Toggle
           label="Conectores"
           checked={joint.enabled}

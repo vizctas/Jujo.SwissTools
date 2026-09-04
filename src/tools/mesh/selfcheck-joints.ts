@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import Module from 'manifold-3d';
-import { applyJoint, frame, planJoint } from './joints.ts';
+import { applyJoint, frame, planJoint, windowColumn } from './joints.ts';
 import type { JointSpec } from './protocol.ts';
 
 const wasm = await Module();
@@ -171,6 +171,67 @@ const auto: JointSpec = { mode: 'dowel', shape: 'round', auto: true, diameter: 6
   assert.equal(spots.length, 2, 'un conector por cada trozo de la sección');
   const xs = spots.map(([x]) => x).sort((a, b) => a - b);
   assert.ok(xs[0]! < 30 && xs[1]! > 50, `uno en cada trozo, fueron ${xs.map((x) => x.toFixed(1)).join(' y ')}`);
+}
+
+// ---- corte medido: la ventana separa un brazo sin tocar el ala que hay detrás ----
+{
+  // Un cuerpo con dos apéndices que cruzan el mismo plano x = 70.
+  const body = Manifold.cube([60, 40, 60], false);
+  const arm = Manifold.cube([40, 12, 12], false).translate([50, 14, 40]);
+  const wing = Manifold.cube([40, 12, 12], false).translate([50, 14, 10]);
+  const model = body.add(arm).add(wing);
+  const total = model.volume();
+
+  // Sin ventana, el plano infinito se lleva los dos apéndices por delante.
+  const { forward } = frame([1, 0, 0]);
+  const alignedPlain = forward(model);
+  const [plainAbove] = alignedPlain.splitByPlane([0, 0, 1], 70);
+  assert.equal(plainAbove.decompose().length, 2, 'el plano entero corta brazo y ala');
+
+  // Con ventana sobre el brazo (ejes Y y Z), solo se separa el brazo.
+  const column = windowColumn(wasm, [1, 0, 0], 70, { center: [20, 46], size: [20, 20], side: 1 }, 500);
+  assert.ok(column, 'la columna se construye con normal sobre un eje');
+  const above = model.intersect(column);
+  const below = model.subtract(column);
+  assert.ok(Math.abs(above.volume() - 20 * 12 * 12) < 1, `solo el trozo de brazo: ${above.volume().toFixed(0)}`);
+  assert.ok(Math.abs(below.volume() - (total - 20 * 12 * 12)) < 1, 'el resto conserva su volumen');
+  assert.equal(below.decompose().length, 1, 'lo que queda sigue siendo una sola pieza, con su ala');
+
+  // Y la cara de unión es la del brazo: el conector no se planta en el ala.
+  const aligned = forward(model);
+  const limit = forward(column).slice(70.01);
+  const { plan, report } = planJoint(aligned, 70, auto, { above: 20, below: 70 }, limit);
+  assert.ok(plan, `debe haber plan: ${report.skipped}`);
+  const sectionOfArm = aligned.slice(70.01).intersect(limit);
+  assert.ok(Math.abs(sectionOfArm.area() - 12 * 12) < 1, 'la sección limitada es la del brazo');
+  for (const [x, y] of plan.spots) {
+    const probe = wasm.CrossSection.circle(0.01, 8).translate([x, y]);
+    assert.ok(!probe.intersect(sectionOfArm).isEmpty(), 'el conector cae dentro del brazo');
+  }
+}
+
+// ---- recorte con profundidad: se lleva solo la caja pedida, no el corredor entero ----
+{
+  // Una barra larga: sin profundidad el recorte se lleva todo lo que hay más
+  // allá del plano; con 20 mm, solo esos 20 mm.
+  const bar = Manifold.cube([100, 20, 20], false);
+  const sinFondo = windowColumn(wasm, [1, 0, 0], 30, { center: [10, 10], size: [30, 30], side: 1 }, 500);
+  const conFondo = windowColumn(wasm, [1, 0, 0], 30, { center: [10, 10], size: [30, 30], side: 1 }, 20);
+  assert.ok(sinFondo && conFondo);
+  assert.ok(Math.abs(bar.intersect(sinFondo).volume() - 70 * 20 * 20) < 1, 'sin profundidad llega al final');
+  assert.ok(Math.abs(bar.intersect(conFondo).volume() - 20 * 20 * 20) < 1, 'con profundidad, solo la caja');
+  assert.ok(Math.abs(bar.subtract(conFondo).volume() - (100 - 20) * 20 * 20) < 1, 'y el resto queda entero');
+  // Hacia el otro lado se lleva el trozo de antes del plano, no el de después.
+  const atras = windowColumn(wasm, [1, 0, 0], 30, { center: [10, 10], size: [30, 30], side: -1 }, 20);
+  assert.ok(atras);
+  assert.ok(Math.abs(bar.intersect(atras).volume() - 20 * 20 * 20) < 1, 'lado negativo: la caja anterior al plano');
+  const box = bar.intersect(atras).boundingBox();
+  assert.ok(Math.abs(box.min[0] - 10) < 0.01 && Math.abs(box.max[0] - 30) < 0.01, `x 10..30, fue ${box.min[0]}..${box.max[0]}`);
+}
+
+// ---- ventana con normal torcida: no se aplica, y se dice ----
+{
+  assert.equal(windowColumn(wasm, [0.7, 0.7, 0], 10, { center: [0, 0], size: [10, 10], side: 1 }, 100), null);
 }
 
 console.log('joints self-check ok');

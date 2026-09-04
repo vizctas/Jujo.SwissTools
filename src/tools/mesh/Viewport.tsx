@@ -39,6 +39,14 @@ export interface ViewportProps {
   /** Plano de corte sobre la pieza seleccionada, si hay una. */
   cut: CutState | null;
   onCutPosition: (position: number) => void;
+  /** Centro de la ventana de recorte, al arrastrarla sobre el plano. */
+  onCutWindow: (center: [number, number]) => void;
+  /** Modo apuntar: el siguiente clic lleva el corte a donde se pinche. */
+  placing: boolean;
+  /** Punto del corte en coordenadas del modelo, y sobre qué pieza. */
+  onCutPoint: (point: Vec3, partId: string) => void;
+  /** Estado del movimiento con eje bloqueado, para poder anunciarlo. */
+  onMoveMode: (state: { active: boolean; axis: number | null }) => void;
   volume: Vec3;
   showVolume: boolean;
 }
@@ -127,8 +135,31 @@ const AXIS_VECTORS: Record<CutState['axis'], THREE.Vector3> = {
   z: new THREE.Vector3(0, 0, 1),
 };
 
+const axisIndex = (axis: CutState['axis']): number => (axis === 'x' ? 0 : axis === 'y' ? 1 : 2);
+/** Los dos ejes del mundo que no son el del corte, en orden ascendente. */
+const crossAxes = (axis: number): number[] => [0, 1, 2].filter((i) => i !== axis);
+
 /** Distancia en pantalla (coordenadas normalizadas) a partir de la cual un clic es un arrastre. */
 const DRAG_THRESHOLD = 0.012;
+
+/**
+ * Capturar el puntero puede fallar si se soltó entre eventos. Sin esto, la
+ * excepción abortaría el arrastre a medio montar y dejaría la cámara bloqueada.
+ */
+function capture(element: HTMLElement, pointerId: number): void {
+  try {
+    element.setPointerCapture(pointerId);
+  } catch {
+    /* se sigue sin captura: el arrastre acaba con el pointerup normal */
+  }
+}
+function release(element: HTMLElement, pointerId: number): void {
+  try {
+    if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
+  } catch {
+    /* ya no era nuestro */
+  }
+}
 
 class Stage3D {
   private renderer: THREE.WebGLRenderer;
@@ -140,6 +171,7 @@ class Stage3D {
   private volumeBox: THREE.LineSegments | null = null;
   private plane: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   private planeEdges: THREE.LineSegments;
+  private windowBox: THREE.LineSegments;
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
   private hoveredId: string | null = null;
@@ -158,6 +190,22 @@ class Stage3D {
   private frame = 0;
   private lastTime = 0;
   private planeDrag: { startPointer: THREE.Vector2; startOffset: number; screenAxis: THREE.Vector2 } | null = null;
+  private windowDrag: { start: [number, number]; surface: THREE.Plane; hit: THREE.Vector3 } | null = null;
+  private placing = false;
+  /**
+   * Mover con eje bloqueado, como en un editor 3D: M abre el modo, la letra del
+   * eje lo fija, el ratón lo arrastra 1:1, Enter o clic confirma y Esc devuelve
+   * el corte donde estaba. Apuntar con la mano sobre un rectángulo pequeño es
+   * justo lo que no funcionaba.
+   */
+  private move: {
+    axis: number | null;
+    origin: THREE.Vector3;
+    start: THREE.Vector3;
+    startPointer: THREE.Vector2;
+    screenAxis: THREE.Vector2 | null;
+    primed?: boolean;
+  } | null = null;
   private pieceDrag: { entry: Entry; startPointer: THREE.Vector2; startManual: THREE.Vector3; ground: THREE.Plane; startHit: THREE.Vector3; moving: boolean } | null = null;
   private pressAt: THREE.Vector2 | null = null;
   private resize: ResizeObserver;
@@ -166,7 +214,13 @@ class Stage3D {
 
   constructor(
     private container: HTMLElement,
-    private handlers: { onSelect: (id: string | null) => void; onCutPosition: (position: number) => void },
+    private handlers: {
+      onSelect: (id: string | null) => void;
+      onCutPosition: (position: number) => void;
+      onCutWindow: (center: [number, number]) => void;
+      onCutPoint: (point: Vec3, partId: string) => void;
+      onMoveMode: (state: { active: boolean; axis: number | null }) => void;
+    },
   ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -203,6 +257,14 @@ class Stage3D {
       new THREE.LineBasicMaterial({ transparent: true, opacity: 0.9 }),
     );
     this.plane.add(this.planeEdges);
+    // La caja del recorte: sin verla, «hasta el final» y «solo este trozo» se
+    // parecen demasiado, y uno se lleva medio modelo por delante.
+    this.windowBox = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+      new THREE.LineBasicMaterial({ transparent: true, opacity: 0.5 }),
+    );
+    this.windowBox.visible = false;
+    this.plane.add(this.windowBox);
     this.scene.add(this.plane);
 
     this.refreshColors();
@@ -216,6 +278,7 @@ class Stage3D {
     this.resize.observe(container);
     this.fit();
 
+    window.addEventListener('keydown', this.onKey);
     const canvas = this.renderer.domElement;
     canvas.addEventListener('pointermove', this.onPointerMove);
     canvas.addEventListener('pointerdown', this.onPointerDown);
@@ -234,6 +297,7 @@ class Stage3D {
     this.colors.faint = cssColor('--faint', '#9a9ca8');
     this.plane.material.color.copy(this.colors.primary);
     (this.planeEdges.material as THREE.LineBasicMaterial).color.copy(this.colors.primary);
+    if (this.windowBox) (this.windowBox.material as THREE.LineBasicMaterial).color.copy(this.colors.primary);
     if (this.volumeBox) (this.volumeBox.material as THREE.LineBasicMaterial).color.copy(this.colors.faint);
     if (this.grid) this.grid.material.color.copy(this.colors.faint);
     for (const entry of this.entries.values()) this.applyOutline(entry);
@@ -576,21 +640,54 @@ class Stage3D {
       return;
     }
     const { min, size, center } = entry.part.bounds;
-    const axis = this.cut.axis === 'x' ? 0 : this.cut.axis === 'y' ? 1 : 2;
-    const others = [0, 1, 2].filter((a) => a !== axis) as [number, number];
-    const width = Math.max(1, size[others[0]]! * 1.15);
-    const height = Math.max(1, size[others[1]]! * 1.15);
+    const axis = axisIndex(this.cut.axis);
+    const others = crossAxes(axis);
+    // PlaneGeometry mira a +Z; se orienta hacia el eje del corte.
+    const turn = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), AXIS_VECTORS[this.cut.axis]);
+    // A qué eje del mundo mira cada lado del rectángulo. Sacarlo del giro, y no
+    // a mano, evita que el ancho y el alto salgan cambiados según el eje.
+    const facing = (local: THREE.Vector3): number => {
+      const v = local.applyQuaternion(turn);
+      const abs = [Math.abs(v.x), Math.abs(v.y), Math.abs(v.z)];
+      return abs.indexOf(Math.max(...abs));
+    };
+    const window = this.cut.window;
+    const extent = (worldAxis: number): number =>
+      window
+        ? Math.max(0.5, window.size[others.indexOf(worldAxis)]!)
+        : Math.max(1, size[worldAxis]! * 1.15);
+
     this.plane.geometry.dispose();
-    this.plane.geometry = new THREE.PlaneGeometry(width, height);
+    this.plane.geometry = new THREE.PlaneGeometry(
+      extent(facing(new THREE.Vector3(1, 0, 0))),
+      extent(facing(new THREE.Vector3(0, 1, 0))),
+    );
     this.planeEdges.geometry.dispose();
     this.planeEdges.geometry = new THREE.EdgesGeometry(this.plane.geometry);
 
     const position = new THREE.Vector3(...center);
+    if (window) {
+      position.setComponent(others[0]!, window.center[0]);
+      position.setComponent(others[1]!, window.center[1]);
+    }
     position.setComponent(axis, min[axis]! + this.cut.position * size[axis]!);
     position.add(this.resolve(entry));
     this.plane.position.copy(position);
-    // PlaneGeometry mira a +Z; se orienta hacia el eje del corte.
-    this.plane.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), AXIS_VECTORS[this.cut.axis]);
+    this.plane.quaternion.copy(turn);
+
+    // La caja se dibuja en el marco del plano: +Z local ya apunta al eje del corte.
+    const depth = window?.depth ?? null;
+    if (window && depth !== null && depth > 0) {
+      const size = this.plane.geometry.parameters;
+      this.windowBox.geometry.dispose();
+      this.windowBox.geometry = new THREE.EdgesGeometry(
+        new THREE.BoxGeometry(size.width, size.height, depth),
+      );
+      this.windowBox.position.set(0, 0, (window.side * depth) / 2);
+      this.windowBox.visible = true;
+    } else {
+      this.windowBox.visible = false;
+    }
     this.plane.visible = true;
   }
 
@@ -622,6 +719,44 @@ class Stage3D {
   private onPointerMove = (event: PointerEvent): void => {
     this.pointer.copy(this.pointerFrom(event));
 
+    if (this.move) {
+      const { axis, screenAxis, start, startPointer } = this.move;
+      if (axis === null || !screenAxis) return;
+      // El ancla se toma en el primer movimiento, no al pulsar la tecla: si el
+      // puntero estaba sobre el panel, su última posición conocida es vieja y el
+      // corte pegaría un salto.
+      if (!this.move.primed) {
+        this.move = { ...this.move, primed: true, startPointer: this.pointer.clone() };
+        return;
+      }
+      const entry = this.selectedEntry();
+      if (!entry) return;
+      const delta = this.pointer.clone().sub(startPointer);
+      const along = delta.dot(screenAxis) / Math.max(1e-6, screenAxis.lengthSq());
+      const point = start.clone();
+      point.setComponent(axis, start.getComponent(axis) + along);
+      this.handlers.onCutPoint([point.x, point.y, point.z], entry.part.id);
+      return;
+    }
+
+    if (this.windowDrag && this.cut?.window) {
+      // El recorte se mueve sobre su propio plano, siguiendo al puntero 1:1.
+      this.raycaster.setFromCamera(this.pointer, this.camera);
+      const hit = new THREE.Vector3();
+      if (!this.raycaster.ray.intersectPlane(this.windowDrag.surface, hit)) return;
+      const others = crossAxes(axisIndex(this.cut.axis));
+      const delta = hit.sub(this.windowDrag.hit);
+      const center: [number, number] = [
+        this.windowDrag.start[0] + delta.getComponent(others[0]!),
+        this.windowDrag.start[1] + delta.getComponent(others[1]!),
+      ];
+      this.cut = { ...this.cut, window: { ...this.cut.window, center } };
+      this.updatePlane();
+      this.invalidate();
+      this.handlers.onCutWindow(center);
+      return;
+    }
+
     if (this.planeDrag) {
       const delta = this.pointer.clone().sub(this.planeDrag.startPointer);
       const { screenAxis } = this.planeDrag;
@@ -645,7 +780,7 @@ class Stage3D {
         drag.moving = true;
         drag.entry.drop = null;
         this.controls.enabled = false;
-        this.renderer.domElement.setPointerCapture(event.pointerId);
+        capture(this.renderer.domElement, event.pointerId);
         this.renderer.domElement.style.cursor = 'grabbing';
       }
       // Se mueve sobre la mesa: el plano horizontal a la altura del punto agarrado.
@@ -675,6 +810,42 @@ class Stage3D {
     const point = this.pointerFrom(event);
     this.pressAt = point.clone();
 
+    // Un clic confirma el movimiento en curso, no empieza otra cosa.
+    if (this.move) {
+      this.pressAt = null;
+      this.endMove();
+      return;
+    }
+
+    // Apuntar y colocar: el gesto más corto que hay para llevar el corte a un sitio.
+    if (this.placing) {
+      const hit = this.pick(point);
+      this.pressAt = null;
+      if (!hit) return;
+      const local = hit.point.clone().sub(this.resolve(hit.entry));
+      this.handlers.onCutPoint([local.x, local.y, local.z], hit.entry.part.id);
+      return;
+    }
+
+    if (this.cut?.window && this.overPlane(point)) {
+      // Con recorte, arrastrar mueve la ventana; el plano se recorre con el mando
+      // de posición, que es un número y no se pelea con este gesto.
+      const surface = new THREE.Plane().setFromNormalAndCoplanarPoint(
+        AXIS_VECTORS[this.cut.axis],
+        this.plane.position,
+      );
+      const hit = new THREE.Vector3();
+      this.raycaster.setFromCamera(point, this.camera);
+      if (this.raycaster.ray.intersectPlane(surface, hit)) {
+        this.windowDrag = { start: [...this.cut.window.center], surface, hit: hit.clone() };
+        this.controls.enabled = false;
+        capture(this.renderer.domElement, event.pointerId);
+        this.renderer.domElement.style.cursor = 'grabbing';
+        this.pressAt = null;
+        return;
+      }
+    }
+
     if (this.cut && this.overPlane(point)) {
       const entry = this.selectedEntry();
       if (!entry) return;
@@ -686,7 +857,7 @@ class Stage3D {
       const screenAxis = new THREE.Vector2(b.x - a.x, b.y - a.y);
       this.planeDrag = { startPointer: point, startOffset: this.cut.position, screenAxis };
       this.controls.enabled = false;
-      this.renderer.domElement.setPointerCapture(event.pointerId);
+      capture(this.renderer.domElement, event.pointerId);
       this.renderer.domElement.style.cursor = 'grabbing';
       this.pressAt = null;
       return;
@@ -710,10 +881,17 @@ class Stage3D {
 
   private onPointerUp = (event: PointerEvent): void => {
     const canvas = this.renderer.domElement;
+    if (this.windowDrag) {
+      this.windowDrag = null;
+      this.controls.enabled = true;
+      release(canvas, event.pointerId);
+      canvas.style.cursor = '';
+      return;
+    }
     if (this.planeDrag) {
       this.planeDrag = null;
       this.controls.enabled = true;
-      if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+      release(canvas, event.pointerId);
       canvas.style.cursor = '';
       return;
     }
@@ -721,7 +899,7 @@ class Stage3D {
       const drag = this.pieceDrag;
       this.pieceDrag = null;
       this.controls.enabled = true;
-      if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+      release(canvas, event.pointerId);
       canvas.style.cursor = '';
       if (drag.moving) {
         // Soltar es soltar: la pieza cae hasta lo que la sostenga.
@@ -789,8 +967,82 @@ class Stage3D {
     }
   };
 
+  setPlacing(placing: boolean): void {
+    if (this.placing === placing) return;
+    this.placing = placing;
+    this.renderer.domElement.style.cursor = placing ? 'crosshair' : '';
+  }
+
+  /** El punto del corte en coordenadas del modelo: el plano menos la separación. */
+  private cutPoint(): THREE.Vector3 | null {
+    const entry = this.selectedEntry();
+    if (!entry || !this.plane.visible) return null;
+    return this.plane.position.clone().sub(this.resolve(entry));
+  }
+
+  private onKey = (event: KeyboardEvent): void => {
+    const target = event.target;
+    if (target instanceof Element && target.closest('input, textarea, select, [contenteditable]')) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const key = event.key.toLowerCase();
+
+    if (!this.move) {
+      if (key !== 'm' || !this.cut || !this.selectedId) return;
+      const origin = this.cutPoint();
+      if (!origin) return;
+      event.preventDefault();
+      this.move = {
+        axis: null,
+        origin,
+        start: origin.clone(),
+        startPointer: this.pointer.clone(),
+        screenAxis: null,
+      };
+      this.controls.enabled = false;
+      this.renderer.domElement.style.cursor = 'crosshair';
+      this.handlers.onMoveMode({ active: true, axis: null });
+      return;
+    }
+
+    if (key === 'escape') {
+      const { origin } = this.move;
+      const entry = this.selectedEntry();
+      if (entry) this.handlers.onCutPoint([origin.x, origin.y, origin.z], entry.part.id);
+      this.endMove();
+      return;
+    }
+    if (key === 'enter' || key === 'm') {
+      this.endMove();
+      return;
+    }
+    const axis = key === 'x' ? 0 : key === 'y' ? 1 : key === 'z' ? 2 : -1;
+    if (axis < 0) return;
+    event.preventDefault();
+    // Al fijar el eje se ancla aquí: lo que se mueve a partir de ahora es el ratón.
+    const world = new THREE.Vector3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0);
+    const from = this.plane.position.clone().project(this.camera);
+    const to = this.plane.position.clone().add(world).project(this.camera);
+    this.move = {
+      ...this.move,
+      axis,
+      start: this.cutPoint() ?? this.move.origin,
+      startPointer: this.pointer.clone(),
+      screenAxis: new THREE.Vector2(to.x - from.x, to.y - from.y),
+    };
+    this.handlers.onMoveMode({ active: true, axis });
+  };
+
+  private endMove(): void {
+    if (!this.move) return;
+    this.move = null;
+    this.controls.enabled = true;
+    this.renderer.domElement.style.cursor = this.placing ? 'crosshair' : '';
+    this.handlers.onMoveMode({ active: false, axis: null });
+  }
+
   dispose(): void {
     cancelAnimationFrame(this.frame);
+    window.removeEventListener('keydown', this.onKey);
     this.resize.disconnect();
     this.themeWatch.disconnect();
     const canvas = this.renderer.domElement;
@@ -803,6 +1055,8 @@ class Stage3D {
     this.entries.clear();
     this.plane.geometry.dispose();
     this.plane.material.dispose();
+    this.windowBox.geometry.dispose();
+    (this.windowBox.material as THREE.Material).dispose();
     this.grid?.geometry.dispose();
     this.controls.dispose();
     this.renderer.dispose();
@@ -815,8 +1069,20 @@ class Stage3D {
 export function Viewport(props: ViewportProps): ReactNode {
   const container = useRef<HTMLDivElement>(null);
   const stage = useRef<Stage3D | null>(null);
-  const handlers = useRef({ onSelect: props.onSelect, onCutPosition: props.onCutPosition });
-  handlers.current = { onSelect: props.onSelect, onCutPosition: props.onCutPosition };
+  const handlers = useRef({
+    onSelect: props.onSelect,
+    onCutPosition: props.onCutPosition,
+    onCutWindow: props.onCutWindow,
+    onCutPoint: props.onCutPoint,
+    onMoveMode: props.onMoveMode,
+  });
+  handlers.current = {
+    onSelect: props.onSelect,
+    onCutPosition: props.onCutPosition,
+    onCutWindow: props.onCutWindow,
+    onCutPoint: props.onCutPoint,
+    onMoveMode: props.onMoveMode,
+  };
   const [unsupported, setUnsupported] = useState(false);
 
   useEffect(() => {
@@ -825,6 +1091,9 @@ export function Viewport(props: ViewportProps): ReactNode {
       stage.current = new Stage3D(container.current, {
         onSelect: (id) => handlers.current.onSelect(id),
         onCutPosition: (position) => handlers.current.onCutPosition(position),
+        onCutWindow: (center) => handlers.current.onCutWindow(center),
+        onCutPoint: (point, partId) => handlers.current.onCutPoint(point, partId),
+        onMoveMode: (state) => handlers.current.onMoveMode(state),
       });
     } catch {
       setUnsupported(true);
@@ -841,6 +1110,7 @@ export function Viewport(props: ViewportProps): ReactNode {
   useEffect(() => stage.current?.setExploded(props.exploded), [props.exploded]);
   useEffect(() => stage.current?.setSpread(props.spread), [props.spread]);
   useEffect(() => stage.current?.setCut(props.cut), [props.cut]);
+  useEffect(() => stage.current?.setPlacing(props.placing), [props.placing]);
   useEffect(() => stage.current?.setVolume(props.volume, props.showVolume), [props.volume, props.showVolume]);
 
   if (unsupported) {

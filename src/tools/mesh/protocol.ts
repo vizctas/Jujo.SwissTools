@@ -18,10 +18,57 @@ export interface MeshStats {
   vertices: number;
 }
 
+/**
+ * Ventana del corte: el rectángulo, sobre el plano, dentro del cual se corta.
+ * Centro y tamaño van en los dos ejes del mundo distintos al del corte, en
+ * orden ascendente (corte en Y -> ejes X y Z).
+ */
+export interface CutWindow {
+  center: [number, number];
+  size: [number, number];
+  /**
+   * Hacia qué lado del plano queda lo que se separa. Sin ventana da igual —el
+   * plano parte en dos—, pero con ventana decide si se lleva el brazo o el trozo
+   * de cuerpo que hay al otro lado.
+   */
+  side: 1 | -1;
+  /**
+   * Cuánto avanza el corte a lo largo de su propio eje, en mm desde el plano.
+   * `null` llega hasta el final de la pieza, que es lo que quiere una extremidad;
+   * un número recorta solo ese trozo, que es lo que quiere media pata.
+   */
+  depth?: number | null;
+}
+
 /** Plano en el espacio de la pieza: normal unitaria y distancia desde el origen. */
 export interface Plane {
   normal: [number, number, number];
   offset: number;
+  /**
+   * Con ventana, el corte solo alcanza lo que cae dentro de ella: separa un
+   * brazo sin tocar lo que haya detrás. Sin ella, el plano es infinito y parte
+   * todo lo que cruza. Solo vale con normales sobre un eje, que son las que
+   * ofrece la herramienta.
+   */
+  window?: CutWindow | null;
+}
+
+/**
+ * Una parte que se desprende: un brazo, una cabeza, un ojo pegado a la cara.
+ * Es una propuesta de corte ya medida, no un corte hecho.
+ */
+export interface Appendage {
+  /** Eje del mundo por el que conviene cortar: 0 = X, 1 = Y, 2 = Z. */
+  axis: 0 | 1 | 2;
+  /** Dónde, en coordenadas del mundo sobre ese eje. */
+  offset: number;
+  /** Hacia dónde queda lo que se desprende. */
+  side: 1 | -1;
+  window: CutWindow;
+  /** Volumen aproximado de lo que se desprendería, en mm³. */
+  volume: number;
+  /** Área de la cara por la que está pegado, en mm². */
+  area: number;
 }
 
 /**
@@ -83,7 +130,9 @@ export type MeshWorkerRequest =
       joint: JointSpec | null;
     }
   /** Une una base plana bajo la pieza. */
-  | { t: 'base'; id: string; mesh: WireMesh; height: number; margin: number };
+  | { t: 'base'; id: string; mesh: WireMesh; height: number; margin: number }
+  /** Busca cuellos: sitios por donde la pieza se desprende limpiamente. */
+  | { t: 'appendages'; id: string; mesh: WireMesh };
 
 export type MeshWorkerResponse =
   | { t: 'ready'; version: string }
@@ -91,4 +140,5 @@ export type MeshWorkerResponse =
   | { t: 'stats'; id: string; stats: MeshStats }
   | { t: 'pieces'; id: string; pieces: WireMesh[]; pins: WireMesh[]; joints: JointReport[] }
   | { t: 'mesh'; id: string; mesh: WireMesh }
+  | { t: 'appendages'; id: string; found: Appendage[] }
   | { t: 'failed'; id: string; message: string };
