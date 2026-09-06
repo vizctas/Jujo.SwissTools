@@ -195,7 +195,8 @@ class Stage3D {
   private drawing: 'knife' | 'lasso' | null = null;
   /** El trazo en curso, en píxeles del lienzo. */
   private stroke: { points: [number, number][]; pointerId: number } | null = null;
-  private strokeCancelled = false;
+  /** Puntero de un trazo cancelado con Esc: la órbita vuelve cuando ese puntero suelte, no antes. */
+  private strokeCancelled: number | null = null;
   /** Encima del WebGL: el trazo se pinta en 2D, que es lo que es. */
   private ink: HTMLCanvasElement;
   /**
@@ -843,6 +844,8 @@ class Stage3D {
     // Dibujar: el trazo empieza aquí y la cámara se queda quieta hasta soltar.
     if (this.drawing) {
       this.pressAt = null;
+      // Un trazo a la vez: el segundo dedo no empieza otro ni roba el primero.
+      if (this.stroke) return;
       if (!this.planeFrame()) return;
       this.stroke = { points: [this.pixelFrom(event)], pointerId: event.pointerId };
       this.controls.enabled = false;
@@ -916,8 +919,10 @@ class Stage3D {
 
   private onPointerUp = (event: PointerEvent): void => {
     const canvas = this.renderer.domElement;
-    if (this.strokeCancelled) {
-      this.strokeCancelled = false;
+    if (this.strokeCancelled !== null) {
+      // Solo el puntero del trazo cancelado devuelve la órbita: otro dedo no cuenta.
+      if (event.pointerId !== this.strokeCancelled) return;
+      this.strokeCancelled = null;
       this.controls.enabled = true;
       release(canvas, event.pointerId);
       return;
@@ -1024,9 +1029,19 @@ class Stage3D {
   setDrawing(mode: 'knife' | 'lasso' | null): void {
     if (this.drawing === mode) return;
     this.drawing = mode;
+    this.cancelStroke();
+    this.renderer.domElement.style.cursor = mode || this.placing ? 'crosshair' : '';
+  }
+
+  /** Abandona el trazo a medias. Si el puntero sigue pulsado, la órbita vuelve al soltarlo. */
+  private cancelStroke(): void {
+    const cancelled = this.stroke?.pointerId ?? null;
     this.stroke = null;
     this.paintStroke();
-    this.renderer.domElement.style.cursor = mode || this.placing ? 'crosshair' : '';
+    this.strokeCancelled = cancelled;
+    // El modo mover ('m') es independiente de dibujar y ya deja la órbita apagada:
+    // no reactivarla si sigue en curso.
+    if (cancelled === null && !this.move) this.controls.enabled = true;
   }
 
   /** Píxeles del lienzo, para el trazo; lo demás usa coordenadas normalizadas. */
@@ -1136,11 +1151,7 @@ class Stage3D {
       event.preventDefault();
       // Con un trazo a medias el puntero sigue pulsado: la órbita vuelve al
       // soltar, no ahora, o la cámara arrancaría desde el trazo cancelado.
-      const midStroke = this.stroke !== null;
-      this.stroke = null;
-      this.paintStroke();
-      if (midStroke) this.strokeCancelled = true;
-      else this.controls.enabled = true;
+      this.cancelStroke();
       this.handlers.onDrawMode(null);
       return;
     }
