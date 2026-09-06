@@ -477,11 +477,12 @@ export function MeshStage(): ReactNode {
       if (key === 'e') {
         event.preventDefault();
         setExploded(!exploded);
-      } else if (key === 'c' && selectedId) {
+      // Con el corte en movimiento (M) no se dibuja: dos modos a la vez confunden al badge y a Esc.
+      } else if (key === 'c' && selectedId && !moving.active) {
         event.preventDefault();
         setPlacing(false);
         setDrawing((current) => (current === 'knife' ? null : 'knife'));
-      } else if (key === 'd' && selectedId && cut.window) {
+      } else if (key === 'd' && selectedId && cut.window && !moving.active) {
         event.preventDefault();
         setPlacing(false);
         setDrawing((current) => (current === 'lasso' ? null : 'lasso'));
@@ -489,7 +490,7 @@ export function MeshStage(): ReactNode {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [parts.length, exploded, setExploded, selectedId, cut.window]);
+  }, [parts.length, exploded, setExploded, selectedId, cut.window, moving.active]);
 
   if (parts.length === 0) {
     return (
@@ -752,8 +753,8 @@ export function MeshPanel(): ReactNode {
         onToggle={toggle('corte')}
         summary={
           joint.enabled
-            ? `${(axis ?? 'libre').toUpperCase()} · ${Math.round(cut.position * 100)} % · ${shape?.label.toLowerCase()}`
-            : `${(axis ?? 'libre').toUpperCase()} · ${Math.round(cut.position * 100)} % · sin conector`
+            ? `${axis ? axis.toUpperCase() : 'Libre'} · ${Math.round(cut.position * 100)} % · ${shape?.label.toLowerCase()}`
+            : `${axis ? axis.toUpperCase() : 'Libre'} · ${Math.round(cut.position * 100)} % · sin conector`
         }
       >
         <p className="row-hint">
