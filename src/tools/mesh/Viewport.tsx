@@ -1159,6 +1159,10 @@ class Stage3D {
       return;
     }
 
+    // Dibujando no se entra en mover: dos modos a la vez dejan la órbita en un
+    // estado que nadie ha pedido. Es el espejo de C/D bloqueados durante M.
+    if (this.drawing) return;
+
     if (!this.move) {
       if (key !== 'm' || !this.cut || !this.selectedId) return;
       const origin = this.cutPoint();
@@ -1228,6 +1232,8 @@ class Stage3D {
     this.entries.clear();
     this.plane.geometry.dispose();
     this.plane.material.dispose();
+    this.planeEdges.geometry.dispose();
+    (this.planeEdges.material as THREE.Material).dispose();
     this.windowBox.geometry.dispose();
     (this.windowBox.material as THREE.Material).dispose();
     this.grid?.geometry.dispose();

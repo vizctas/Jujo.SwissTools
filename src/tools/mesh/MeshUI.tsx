@@ -466,7 +466,17 @@ export function MeshStage(): ReactNode {
     if (mode) setPlacing(false);
   };
 
+  // Sin pieza elegida no hay plano: un modo de dibujo que sobreviva a eso se
+  // traga todos los clics y solo Esc lo saca.
+  useEffect(() => {
+    if (!selectedId) {
+      setDrawing(null);
+      setPlacing(false);
+    }
+  }, [selectedId]);
+
   // «E» separa y reúne, «C» cuchillo, «D» dibujar; solo cuando el foco no está escribiendo.
+  const hasWindow = cut.window !== null;
   useEffect(() => {
     if (parts.length === 0) return;
     const onKey = (event: KeyboardEvent): void => {
@@ -482,7 +492,7 @@ export function MeshStage(): ReactNode {
         event.preventDefault();
         setPlacing(false);
         setDrawing((current) => (current === 'knife' ? null : 'knife'));
-      } else if (key === 'd' && selectedId && cut.window && !moving.active) {
+      } else if (key === 'd' && selectedId && hasWindow && !moving.active) {
         event.preventDefault();
         setPlacing(false);
         setDrawing((current) => (current === 'lasso' ? null : 'lasso'));
@@ -490,7 +500,7 @@ export function MeshStage(): ReactNode {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [parts.length, exploded, setExploded, selectedId, cut.window, moving.active]);
+  }, [parts.length, exploded, setExploded, selectedId, hasWindow, moving.active]);
 
   if (parts.length === 0) {
     return (
