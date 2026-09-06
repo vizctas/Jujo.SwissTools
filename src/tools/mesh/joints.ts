@@ -12,12 +12,13 @@
  * Sin DOM ni worker: se importa desde el worker y desde el self-check de Node.
  */
 
+import type { Mat4 } from 'manifold-3d';
+import { planeBasis, type Vec3 } from './plane.ts';
 import type { JointReport, JointShape, JointSpec } from './protocol.ts';
 
 type Wasm = Awaited<ReturnType<typeof import('manifold-3d').default>>;
 type M = InstanceType<Wasm['Manifold']>;
 type CS = InstanceType<Wasm['CrossSection']>;
-type Vec3 = [number, number, number];
 
 const SEGMENTS = 48;
 const MIN_DIAMETER = 2;
@@ -26,23 +27,22 @@ const MAX_PINS = 4;
 
 /* ------------------------------------------------------------------ Marco */
 
-/** Rotaciones que llevan la normal a +Z y de vuelta. */
+/**
+ * Transformaciones que llevan la normal a +Z y de vuelta.
+ *
+ * Es la misma base que `planeBasis`, no unos Euler equivalentes: u va a X y v a
+ * Y, así que la columna de recorte que se construye aquí en (x, y) y el
+ * rectángulo que el gizmo dibuja en (u, v) son, por construcción, el mismo.
+ */
 export function frame(normal: Vec3): { forward: (m: M) => M; back: (m: M) => M } {
-  const [x, y, z] = normal;
-  const pitch = (Math.atan2(Math.hypot(x, y), z) * 180) / Math.PI;
-  const yaw = (Math.atan2(y, x) * 180) / Math.PI;
-  const chain = (m: M, steps: Vec3[]): M => {
-    let current = m;
-    for (const step of steps) {
-      const next = current.rotate(step);
-      if (current !== m) current.delete();
-      current = next;
-    }
-    return current;
-  };
+  const { u, v, n } = planeBasis(normal);
+  // Matrices 4×4 por columnas (la última fila se ignora). `forward` tiene u, v, n
+  // por filas; `back` los tiene por columnas.
+  const forward: Mat4 = [u[0], v[0], n[0], 0, u[1], v[1], n[1], 0, u[2], v[2], n[2], 0, 0, 0, 0, 1];
+  const back: Mat4 = [u[0], u[1], u[2], 0, v[0], v[1], v[2], 0, n[0], n[1], n[2], 0, 0, 0, 0, 1];
   return {
-    forward: (m) => chain(m, [[0, 0, -yaw], [0, -pitch, 0]]),
-    back: (m) => chain(m, [[0, pitch, 0], [0, 0, yaw]]),
+    forward: (m) => m.transform(forward),
+    back: (m) => m.transform(back),
   };
 }
 

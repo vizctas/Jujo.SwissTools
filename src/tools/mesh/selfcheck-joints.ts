@@ -10,12 +10,34 @@ import assert from 'node:assert/strict';
 import Module from 'manifold-3d';
 import { applyJoint, frame, planJoint, windowColumn } from './joints.ts';
 import type { JointSpec } from './protocol.ts';
+import { dot, planeBasis } from './plane.ts';
 
 const wasm = await Module();
 wasm.setup();
 const { Manifold } = wasm;
 
 const auto: JointSpec = { mode: 'dowel', shape: 'round', auto: true, diameter: 6, depth: 10, clearance: 0.15, count: 0 };
+
+// ---- frame y planeBasis son el mismo marco ----
+{
+  // Un cubo desplazado, girado al marco alineado, tiene su centro en (c·u, c·v, c·n).
+  const normal: [number, number, number] = [0.6, 0.48, 0.64];
+  const { u, v, n } = planeBasis(normal);
+  const c: [number, number, number] = [30, -12, 25];
+  const cube = Manifold.cube([10, 10, 10], true).translate(c);
+  const { forward, back } = frame(normal);
+  const aligned = forward(cube);
+  const box = aligned.boundingBox();
+  const mid = [(box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2];
+  assert.ok(Math.abs(mid[0]! - dot(c, u)) < 0.01, `x = c·u: ${mid[0]} vs ${dot(c, u)}`);
+  assert.ok(Math.abs(mid[1]! - dot(c, v)) < 0.01, `y = c·v: ${mid[1]} vs ${dot(c, v)}`);
+  assert.ok(Math.abs(mid[2]! - dot(c, n)) < 0.01, `z = c·n: ${mid[2]} vs ${dot(c, n)}`);
+  // Ida y vuelta devuelve el cubo a su sitio, y el volumen no se toca.
+  const restored = back(aligned).boundingBox();
+  assert.ok(Math.abs((restored.min[0] + restored.max[0]) / 2 - c[0]) < 0.01, 'vuelve a x');
+  assert.ok(Math.abs((restored.min[2] + restored.max[2]) / 2 - c[2]) < 0.01, 'vuelve a z');
+  assert.ok(Math.abs(aligned.volume() - 1000) < 0.01, 'una rotación no cambia el volumen');
+}
 
 // ---- barra 30×30×100, corte por el medio en X: espigas de ~6 mm, dos de ellas no caben (sección 30) ----
 {
