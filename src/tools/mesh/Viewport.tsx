@@ -27,7 +27,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { bedClamp, restingZ, shift, type Box } from './layout.ts';
-import type { CutState, Part, Vec3 } from './store.tsx';
+import { cutFrame, type CutState, type Part, type Vec3 } from './store.tsx';
+import type { Basis } from './plane.ts';
 
 export interface ViewportProps {
   parts: Part[];
@@ -129,15 +130,7 @@ interface Entry {
   outline: number;
 }
 
-const AXIS_VECTORS: Record<CutState['axis'], THREE.Vector3> = {
-  x: new THREE.Vector3(1, 0, 0),
-  y: new THREE.Vector3(0, 1, 0),
-  z: new THREE.Vector3(0, 0, 1),
-};
-
-const axisIndex = (axis: CutState['axis']): number => (axis === 'x' ? 0 : axis === 'y' ? 1 : 2);
-/** Los dos ejes del mundo que no son el del corte, en orden ascendente. */
-const crossAxes = (axis: number): number[] => [0, 1, 2].filter((i) => i !== axis);
+const vec = (v: Vec3): THREE.Vector3 => new THREE.Vector3(v[0], v[1], v[2]);
 
 /** Distancia en pantalla (coordenadas normalizadas) a partir de la cual un clic es un arrastre. */
 const DRAG_THRESHOLD = 0.012;
@@ -169,7 +162,7 @@ class Stage3D {
   private entries = new Map<string, Entry>();
   private grid: THREE.GridHelper | null = null;
   private volumeBox: THREE.LineSegments | null = null;
-  private plane: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+  private plane: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
   private planeEdges: THREE.LineSegments;
   private windowBox: THREE.LineSegments;
   private raycaster = new THREE.Raycaster();
@@ -189,8 +182,8 @@ class Stage3D {
   private dirty = true;
   private frame = 0;
   private lastTime = 0;
-  private planeDrag: { startPointer: THREE.Vector2; startOffset: number; screenAxis: THREE.Vector2 } | null = null;
-  private windowDrag: { start: [number, number]; surface: THREE.Plane; hit: THREE.Vector3 } | null = null;
+  private planeDrag: { startPointer: THREE.Vector2; startPosition: number; screenAxis: THREE.Vector2; span: number } | null = null;
+  private windowDrag: { start: [number, number]; surface: THREE.Plane; hit: THREE.Vector3; basis: Basis } | null = null;
   private placing = false;
   /**
    * Mover con eje bloqueado, como en un editor 3D: M abre el modo, la letra del
@@ -633,56 +626,56 @@ class Stage3D {
     return this.selectedId ? (this.entries.get(this.selectedId) ?? null) : null;
   }
 
-  private updatePlane(): void {
+  /** El marco del corte sobre la pieza elegida, o nada si no hay corte. */
+  private planeFrame(): { entry: Entry; basis: Basis; box: ReturnType<typeof cutFrame>['box']; offset: number } | null {
     const entry = this.selectedEntry();
-    if (!entry || !this.cut) {
+    if (!entry || !this.cut) return null;
+    const { basis, box } = cutFrame(entry.part, this.cut.normal);
+    return { entry, basis, box, offset: box.n[0] + this.cut.position * (box.n[1] - box.n[0]) };
+  }
+
+  private updatePlane(): void {
+    const frame = this.planeFrame();
+    if (!frame || !this.cut) {
       this.plane.visible = false;
       return;
     }
-    const { min, size, center } = entry.part.bounds;
-    const axis = axisIndex(this.cut.axis);
-    const others = crossAxes(axis);
-    // PlaneGeometry mira a +Z; se orienta hacia el eje del corte.
-    const turn = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), AXIS_VECTORS[this.cut.axis]);
-    // A qué eje del mundo mira cada lado del rectángulo. Sacarlo del giro, y no
-    // a mano, evita que el ancho y el alto salgan cambiados según el eje.
-    const facing = (local: THREE.Vector3): number => {
-      const v = local.applyQuaternion(turn);
-      const abs = [Math.abs(v.x), Math.abs(v.y), Math.abs(v.z)];
-      return abs.indexOf(Math.max(...abs));
-    };
+    const { entry, basis, box, offset } = frame;
     const window = this.cut.window;
-    const extent = (worldAxis: number): number =>
-      window
-        ? Math.max(0.5, window.size[others.indexOf(worldAxis)]!)
-        : Math.max(1, size[worldAxis]! * 1.15);
+
+    // Sin recorte, el plano se dibuja algo más grande que la pieza; con él, es la ventana.
+    const width = window ? Math.max(0.5, window.size[0]) : Math.max(1, (box.u[1] - box.u[0]) * 1.15);
+    const height = window ? Math.max(0.5, window.size[1]) : Math.max(1, (box.v[1] - box.v[0]) * 1.15);
+    const cu = window ? window.center[0] : (box.u[0] + box.u[1]) / 2;
+    const cv = window ? window.center[1] : (box.v[0] + box.v[1]) / 2;
 
     this.plane.geometry.dispose();
-    this.plane.geometry = new THREE.PlaneGeometry(
-      extent(facing(new THREE.Vector3(1, 0, 0))),
-      extent(facing(new THREE.Vector3(0, 1, 0))),
-    );
+    if (window?.outline && window.outline.length >= 3) {
+      // El contorno se dibuja tal cual, relativo a su centro: es lo que se va a cortar.
+      const shape = new THREE.Shape(window.outline.map(([u, v]) => new THREE.Vector2(u - cu, v - cv)));
+      this.plane.geometry = new THREE.ShapeGeometry(shape);
+    } else {
+      this.plane.geometry = new THREE.PlaneGeometry(width, height);
+    }
     this.planeEdges.geometry.dispose();
     this.planeEdges.geometry = new THREE.EdgesGeometry(this.plane.geometry);
 
-    const position = new THREE.Vector3(...center);
-    if (window) {
-      position.setComponent(others[0]!, window.center[0]);
-      position.setComponent(others[1]!, window.center[1]);
-    }
-    position.setComponent(axis, min[axis]! + this.cut.position * size[axis]!);
-    position.add(this.resolve(entry));
+    // El plano mira a +Z en local; se lleva al marco (u, v, n).
+    const turn = new THREE.Quaternion().setFromRotationMatrix(
+      new THREE.Matrix4().makeBasis(vec(basis.u), vec(basis.v), vec(basis.n)),
+    );
+    const position = vec(basis.u).multiplyScalar(cu)
+      .add(vec(basis.v).multiplyScalar(cv))
+      .add(vec(basis.n).multiplyScalar(offset))
+      .add(this.resolve(entry));
     this.plane.position.copy(position);
     this.plane.quaternion.copy(turn);
 
-    // La caja se dibuja en el marco del plano: +Z local ya apunta al eje del corte.
+    // La caja se dibuja en el marco del plano: +Z local ya apunta a la normal.
     const depth = window?.depth ?? null;
     if (window && depth !== null && depth > 0) {
-      const size = this.plane.geometry.parameters;
       this.windowBox.geometry.dispose();
-      this.windowBox.geometry = new THREE.EdgesGeometry(
-        new THREE.BoxGeometry(size.width, size.height, depth),
-      );
+      this.windowBox.geometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(width, height, depth));
       this.windowBox.position.set(0, 0, (window.side * depth) / 2);
       this.windowBox.visible = true;
     } else {
@@ -744,11 +737,11 @@ class Stage3D {
       this.raycaster.setFromCamera(this.pointer, this.camera);
       const hit = new THREE.Vector3();
       if (!this.raycaster.ray.intersectPlane(this.windowDrag.surface, hit)) return;
-      const others = crossAxes(axisIndex(this.cut.axis));
+      const { basis } = this.windowDrag;
       const delta = hit.sub(this.windowDrag.hit);
       const center: [number, number] = [
-        this.windowDrag.start[0] + delta.getComponent(others[0]!),
-        this.windowDrag.start[1] + delta.getComponent(others[1]!),
+        this.windowDrag.start[0] + delta.dot(vec(basis.u)),
+        this.windowDrag.start[1] + delta.dot(vec(basis.v)),
       ];
       this.cut = { ...this.cut, window: { ...this.cut.window, center } };
       this.updatePlane();
@@ -759,13 +752,10 @@ class Stage3D {
 
     if (this.planeDrag) {
       const delta = this.pointer.clone().sub(this.planeDrag.startPointer);
-      const { screenAxis } = this.planeDrag;
+      const { screenAxis, span, startPosition } = this.planeDrag;
       const along = delta.dot(screenAxis) / Math.max(1e-6, screenAxis.lengthSq());
-      const entry = this.selectedEntry();
-      if (!entry || !this.cut) return;
-      const axis = this.cut.axis === 'x' ? 0 : this.cut.axis === 'y' ? 1 : 2;
-      const size = entry.part.bounds.size[axis]!;
-      const position = Math.min(1, Math.max(0, this.planeDrag.startOffset + along / Math.max(1e-6, size)));
+      if (!this.cut) return;
+      const position = Math.min(1, Math.max(0, startPosition + along / Math.max(1e-6, span)));
       this.cut = { ...this.cut, position };
       this.updatePlane();
       this.invalidate();
@@ -827,17 +817,15 @@ class Stage3D {
       return;
     }
 
-    if (this.cut?.window && this.overPlane(point)) {
+    const frame = this.planeFrame();
+    if (frame && this.cut?.window && this.overPlane(point)) {
       // Con recorte, arrastrar mueve la ventana; el plano se recorre con el mando
       // de posición, que es un número y no se pelea con este gesto.
-      const surface = new THREE.Plane().setFromNormalAndCoplanarPoint(
-        AXIS_VECTORS[this.cut.axis],
-        this.plane.position,
-      );
+      const surface = new THREE.Plane().setFromNormalAndCoplanarPoint(vec(frame.basis.n), this.plane.position);
       const hit = new THREE.Vector3();
       this.raycaster.setFromCamera(point, this.camera);
       if (this.raycaster.ray.intersectPlane(surface, hit)) {
-        this.windowDrag = { start: [...this.cut.window.center], surface, hit: hit.clone() };
+        this.windowDrag = { start: [...this.cut.window.center], surface, hit: hit.clone(), basis: frame.basis };
         this.controls.enabled = false;
         capture(this.renderer.domElement, event.pointerId);
         this.renderer.domElement.style.cursor = 'grabbing';
@@ -846,16 +834,19 @@ class Stage3D {
       }
     }
 
-    if (this.cut && this.overPlane(point)) {
-      const entry = this.selectedEntry();
-      if (!entry) return;
-      // Eje del corte proyectado a pantalla: el arrastre sigue al puntero 1:1.
+    if (frame && this.cut && this.overPlane(point)) {
+      // Normal del corte proyectada a pantalla: el arrastre sigue al puntero 1:1.
       const origin = this.plane.position.clone();
-      const tip = origin.clone().add(AXIS_VECTORS[this.cut.axis]);
+      const tip = origin.clone().add(vec(frame.basis.n));
       const a = origin.project(this.camera);
       const b = tip.project(this.camera);
       const screenAxis = new THREE.Vector2(b.x - a.x, b.y - a.y);
-      this.planeDrag = { startPointer: point, startOffset: this.cut.position, screenAxis };
+      this.planeDrag = {
+        startPointer: point,
+        startPosition: this.cut.position,
+        screenAxis,
+        span: frame.box.n[1] - frame.box.n[0],
+      };
       this.controls.enabled = false;
       capture(this.renderer.domElement, event.pointerId);
       this.renderer.domElement.style.cursor = 'grabbing';
