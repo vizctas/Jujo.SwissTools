@@ -28,7 +28,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { bedClamp, restingZ, shift, type Box } from './layout.ts';
 import { cutFrame, type CutState, type Part, type Vec3 } from './store.tsx';
-import type { Basis } from './plane.ts';
+import { planeFromRays, simplify, toPlane, type Basis } from './plane.ts';
 
 export interface ViewportProps {
   parts: Part[];
@@ -48,6 +48,13 @@ export interface ViewportProps {
   onCutPoint: (point: Vec3, partId: string) => void;
   /** Estado del movimiento con eje bloqueado, para poder anunciarlo. */
   onMoveMode: (state: { active: boolean; axis: number | null }) => void;
+  /** Modo de dibujo: cuchillo (un trazo inclina el plano) o lazo (un contorno recorta). */
+  drawing: 'knife' | 'lasso' | null;
+  onDrawMode: (mode: 'knife' | 'lasso' | null) => void;
+  /** El cuchillo, ya en coordenadas de la pieza. */
+  onKnife: (normal: Vec3, offset: number, partId: string) => void;
+  /** El lazo, en el marco (u, v) del plano actual. */
+  onOutline: (outline: [number, number][]) => void;
   volume: Vec3;
   showVolume: boolean;
 }
@@ -185,6 +192,11 @@ class Stage3D {
   private planeDrag: { startPointer: THREE.Vector2; startPosition: number; screenAxis: THREE.Vector2; span: number } | null = null;
   private windowDrag: { start: [number, number]; surface: THREE.Plane; hit: THREE.Vector3; basis: Basis } | null = null;
   private placing = false;
+  private drawing: 'knife' | 'lasso' | null = null;
+  /** El trazo en curso, en píxeles del lienzo. */
+  private stroke: { points: [number, number][]; pointerId: number } | null = null;
+  /** Encima del WebGL: el trazo se pinta en 2D, que es lo que es. */
+  private ink: HTMLCanvasElement;
   /**
    * Mover con eje bloqueado, como en un editor 3D: M abre el modo, la letra del
    * eje lo fija, el ratón lo arrastra 1:1, Enter o clic confirma y Esc devuelve
@@ -213,6 +225,9 @@ class Stage3D {
       onCutWindow: (center: [number, number]) => void;
       onCutPoint: (point: Vec3, partId: string) => void;
       onMoveMode: (state: { active: boolean; axis: number | null }) => void;
+      onDrawMode: (mode: 'knife' | 'lasso' | null) => void;
+      onKnife: (normal: Vec3, offset: number, partId: string) => void;
+      onOutline: (outline: [number, number][]) => void;
     },
   ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
@@ -222,6 +237,11 @@ class Stage3D {
     this.renderer.domElement.setAttribute('aria-label', 'Vista tridimensional de las piezas');
     this.renderer.domElement.setAttribute('role', 'img');
     container.appendChild(this.renderer.domElement);
+
+    this.ink = document.createElement('canvas');
+    this.ink.className = 'mesh-ink';
+    this.ink.setAttribute('aria-hidden', 'true');
+    container.appendChild(this.ink);
 
     this.camera = new THREE.PerspectiveCamera(40, 1, 0.1, 10_000);
     this.camera.up.set(0, 0, 1);
@@ -309,6 +329,8 @@ class Stage3D {
     const width = Math.max(1, this.container.clientWidth);
     const height = Math.max(1, this.container.clientHeight);
     this.renderer.setSize(width, height, false);
+    this.ink.width = Math.round(this.container.clientWidth * this.renderer.getPixelRatio());
+    this.ink.height = Math.round(this.container.clientHeight * this.renderer.getPixelRatio());
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.invalidate();
@@ -712,6 +734,14 @@ class Stage3D {
   private onPointerMove = (event: PointerEvent): void => {
     this.pointer.copy(this.pointerFrom(event));
 
+    if (this.stroke) {
+      // Puntos a menos de 3 px del anterior no aportan nada y engordan el contorno.
+      const points = simplify([...this.stroke.points, this.pixelFrom(event)], 3);
+      this.stroke = { ...this.stroke, points };
+      this.paintStroke();
+      return;
+    }
+
     if (this.move) {
       const { axis, screenAxis, start, startPointer } = this.move;
       if (axis === null || !screenAxis) return;
@@ -807,6 +837,17 @@ class Stage3D {
       return;
     }
 
+    // Dibujar: el trazo empieza aquí y la cámara se queda quieta hasta soltar.
+    if (this.drawing) {
+      this.pressAt = null;
+      if (!this.planeFrame()) return;
+      this.stroke = { points: [this.pixelFrom(event)], pointerId: event.pointerId };
+      this.controls.enabled = false;
+      capture(this.renderer.domElement, event.pointerId);
+      this.paintStroke();
+      return;
+    }
+
     // Apuntar y colocar: el gesto más corto que hay para llevar el corte a un sitio.
     if (this.placing) {
       const hit = this.pick(point);
@@ -872,6 +913,12 @@ class Stage3D {
 
   private onPointerUp = (event: PointerEvent): void => {
     const canvas = this.renderer.domElement;
+    if (this.stroke) {
+      this.controls.enabled = true;
+      release(canvas, event.pointerId);
+      this.finishStroke();
+      return;
+    }
     if (this.windowDrag) {
       this.windowDrag = null;
       this.controls.enabled = true;
@@ -964,6 +1011,100 @@ class Stage3D {
     this.renderer.domElement.style.cursor = placing ? 'crosshair' : '';
   }
 
+  setDrawing(mode: 'knife' | 'lasso' | null): void {
+    if (this.drawing === mode) return;
+    this.drawing = mode;
+    this.stroke = null;
+    this.paintStroke();
+    this.renderer.domElement.style.cursor = mode || this.placing ? 'crosshair' : '';
+  }
+
+  /** Píxeles del lienzo, para el trazo; lo demás usa coordenadas normalizadas. */
+  private pixelFrom(event: PointerEvent): [number, number] {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return [event.clientX - rect.left, event.clientY - rect.top];
+  }
+
+  private ndcFrom([x, y]: [number, number]): THREE.Vector2 {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return new THREE.Vector2((x / rect.width) * 2 - 1, -(y / rect.height) * 2 + 1);
+  }
+
+  private paintStroke(): void {
+    const context = this.ink.getContext('2d');
+    if (!context) return;
+    const scale = this.renderer.getPixelRatio();
+    context.setTransform(scale, 0, 0, scale, 0, 0);
+    context.clearRect(0, 0, this.ink.width, this.ink.height);
+    const points = this.stroke?.points;
+    if (!points || points.length === 0) return;
+    context.strokeStyle = `#${this.colors.primary.getHexString()}`;
+    context.lineWidth = 2;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    context.beginPath();
+    if (this.drawing === 'knife') {
+      // El cuchillo es recto: se enseña la recta que va a cortar, no el garabato.
+      const [a, b] = [points[0]!, points[points.length - 1]!];
+      context.moveTo(a[0], a[1]);
+      context.lineTo(b[0], b[1]);
+    } else {
+      context.moveTo(points[0]![0], points[0]![1]);
+      for (const [x, y] of points.slice(1)) context.lineTo(x, y);
+      if (points.length >= 3) context.closePath();
+    }
+    context.stroke();
+  }
+
+  /** Cierra el trazo: cuchillo o lazo según el modo. Si no da para nada, el modo sigue. */
+  private finishStroke(): void {
+    const stroke = this.stroke;
+    const frame = this.planeFrame();
+    this.stroke = null;
+    this.paintStroke();
+    if (!stroke || !frame) return;
+    const { entry, basis } = frame;
+
+    if (this.drawing === 'knife') {
+      const a = stroke.points[0]!;
+      const b = stroke.points[stroke.points.length - 1]!;
+      // Dos puntos casi iguales no son una línea: se ignora y se sigue en modo.
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 4) return;
+      const rayA = new THREE.Raycaster();
+      const rayB = new THREE.Raycaster();
+      rayA.setFromCamera(this.ndcFrom(a), this.camera);
+      rayB.setFromCamera(this.ndcFrom(b), this.camera);
+      const origin = this.camera.position;
+      const plane = planeFromRays(
+        [origin.x, origin.y, origin.z],
+        [rayA.ray.direction.x, rayA.ray.direction.y, rayA.ray.direction.z],
+        [rayB.ray.direction.x, rayB.ray.direction.y, rayB.ray.direction.z],
+      );
+      if (!plane) return;
+      // A coordenadas de la pieza: el plano del mundo menos la colocación.
+      const placed = this.resolve(entry);
+      const offset = plane.offset - (plane.normal[0] * placed.x + plane.normal[1] * placed.y + plane.normal[2] * placed.z);
+      this.handlers.onKnife(plane.normal, offset, entry.part.id);
+      this.handlers.onDrawMode(null);
+      return;
+    }
+
+    // Lazo: cada punto del trazo, proyectado sobre el plano actual y pasado a (u, v).
+    const surface = new THREE.Plane().setFromNormalAndCoplanarPoint(vec(basis.n), this.plane.position);
+    const placed = this.resolve(entry);
+    const outline: [number, number][] = [];
+    for (const pixel of stroke.points) {
+      this.raycaster.setFromCamera(this.ndcFrom(pixel), this.camera);
+      const hit = new THREE.Vector3();
+      if (!this.raycaster.ray.intersectPlane(surface, hit)) continue;
+      const local = hit.sub(placed);
+      outline.push(toPlane([local.x, local.y, local.z], basis));
+    }
+    if (outline.length < 3) return;
+    this.handlers.onOutline(outline);
+    this.handlers.onDrawMode(null);
+  }
+
   /** El punto del corte en coordenadas del modelo: el plano menos la separación. */
   private cutPoint(): THREE.Vector3 | null {
     const entry = this.selectedEntry();
@@ -976,6 +1117,15 @@ class Stage3D {
     if (target instanceof Element && target.closest('input, textarea, select, [contenteditable]')) return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     const key = event.key.toLowerCase();
+
+    if (this.drawing && key === 'escape') {
+      event.preventDefault();
+      this.stroke = null;
+      this.paintStroke();
+      this.controls.enabled = true;
+      this.handlers.onDrawMode(null);
+      return;
+    }
 
     if (!this.move) {
       if (key !== 'm' || !this.cut || !this.selectedId) return;
@@ -1052,6 +1202,7 @@ class Stage3D {
     this.controls.dispose();
     this.renderer.dispose();
     canvas.remove();
+    this.ink.remove();
   }
 }
 
@@ -1066,6 +1217,9 @@ export function Viewport(props: ViewportProps): ReactNode {
     onCutWindow: props.onCutWindow,
     onCutPoint: props.onCutPoint,
     onMoveMode: props.onMoveMode,
+    onDrawMode: props.onDrawMode,
+    onKnife: props.onKnife,
+    onOutline: props.onOutline,
   });
   handlers.current = {
     onSelect: props.onSelect,
@@ -1073,6 +1227,9 @@ export function Viewport(props: ViewportProps): ReactNode {
     onCutWindow: props.onCutWindow,
     onCutPoint: props.onCutPoint,
     onMoveMode: props.onMoveMode,
+    onDrawMode: props.onDrawMode,
+    onKnife: props.onKnife,
+    onOutline: props.onOutline,
   };
   const [unsupported, setUnsupported] = useState(false);
 
@@ -1085,6 +1242,9 @@ export function Viewport(props: ViewportProps): ReactNode {
         onCutWindow: (center) => handlers.current.onCutWindow(center),
         onCutPoint: (point, partId) => handlers.current.onCutPoint(point, partId),
         onMoveMode: (state) => handlers.current.onMoveMode(state),
+        onDrawMode: (mode) => handlers.current.onDrawMode(mode),
+        onKnife: (normal, offset, partId) => handlers.current.onKnife(normal, offset, partId),
+        onOutline: (outline) => handlers.current.onOutline(outline),
       });
     } catch {
       setUnsupported(true);
@@ -1102,6 +1262,7 @@ export function Viewport(props: ViewportProps): ReactNode {
   useEffect(() => stage.current?.setSpread(props.spread), [props.spread]);
   useEffect(() => stage.current?.setCut(props.cut), [props.cut]);
   useEffect(() => stage.current?.setPlacing(props.placing), [props.placing]);
+  useEffect(() => stage.current?.setDrawing(props.drawing), [props.drawing]);
   useEffect(() => stage.current?.setVolume(props.volume, props.showVolume), [props.volume, props.showVolume]);
 
   if (unsupported) {
