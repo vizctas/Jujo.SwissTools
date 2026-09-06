@@ -1035,13 +1035,16 @@ class Stage3D {
 
   /** Abandona el trazo a medias. Si el puntero sigue pulsado, la órbita vuelve al soltarlo. */
   private cancelStroke(): void {
-    const cancelled = this.stroke?.pointerId ?? null;
+    if (!this.stroke) {
+      // Sin trazo hay dos casos: no había nada que cancelar, o ya se canceló y su
+      // puntero aún no ha soltado. En el segundo, la órbita la devuelve el
+      // pointerup; tocarla aquí sería arrancar la cámara desde el trazo cancelado.
+      if (this.strokeCancelled === null && !this.move) this.controls.enabled = true;
+      return;
+    }
+    this.strokeCancelled = this.stroke.pointerId;
     this.stroke = null;
     this.paintStroke();
-    this.strokeCancelled = cancelled;
-    // El modo mover ('m') es independiente de dibujar y ya deja la órbita apagada:
-    // no reactivarla si sigue en curso.
-    if (cancelled === null && !this.move) this.controls.enabled = true;
   }
 
   /** Píxeles del lienzo, para el trazo; lo demás usa coordenadas normalizadas. */
