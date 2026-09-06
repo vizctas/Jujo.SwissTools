@@ -200,9 +200,10 @@ const forwardX = (m: InstanceType<typeof Manifold>): InstanceType<typeof Manifol
 
 // ---- recorte: solo el brazo, sin tocar el ala que cruza el mismo plano ----
 {
-  const body = Manifold.cube([70, 60, 60], false);
-  const arm = Manifold.cube([30, 12, 12], false).translate([70, 14, 40]);
-  const wing = Manifold.cube([30, 12, 12], false).translate([70, 40, 10]);
+  // Un cuerpo con dos apéndices que cruzan el mismo plano x = 70.
+  const body = Manifold.cube([60, 40, 60], false);
+  const arm = Manifold.cube([40, 12, 12], false).translate([50, 14, 40]);
+  const wing = Manifold.cube([40, 12, 12], false).translate([50, 14, 10]);
   const model = body.add(arm).add(wing);
   const total = model.volume();
   const { forward } = frame([1, 0, 0]);
