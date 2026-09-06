@@ -195,6 +195,7 @@ class Stage3D {
   private drawing: 'knife' | 'lasso' | null = null;
   /** El trazo en curso, en píxeles del lienzo. */
   private stroke: { points: [number, number][]; pointerId: number } | null = null;
+  private strokeCancelled = false;
   /** Encima del WebGL: el trazo se pinta en 2D, que es lo que es. */
   private ink: HTMLCanvasElement;
   /**
@@ -329,8 +330,8 @@ class Stage3D {
     const width = Math.max(1, this.container.clientWidth);
     const height = Math.max(1, this.container.clientHeight);
     this.renderer.setSize(width, height, false);
-    this.ink.width = Math.round(this.container.clientWidth * this.renderer.getPixelRatio());
-    this.ink.height = Math.round(this.container.clientHeight * this.renderer.getPixelRatio());
+    this.ink.width = Math.round(width * this.renderer.getPixelRatio());
+    this.ink.height = Math.round(height * this.renderer.getPixelRatio());
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.invalidate();
@@ -735,6 +736,8 @@ class Stage3D {
     this.pointer.copy(this.pointerFrom(event));
 
     if (this.stroke) {
+      // Un segundo dedo no dibuja: el trazo es del puntero que lo empezó.
+      if (event.pointerId !== this.stroke.pointerId) return;
       // Puntos a menos de 3 px del anterior no aportan nada y engordan el contorno.
       const points = simplify([...this.stroke.points, this.pixelFrom(event)], 3);
       this.stroke = { ...this.stroke, points };
@@ -913,7 +916,14 @@ class Stage3D {
 
   private onPointerUp = (event: PointerEvent): void => {
     const canvas = this.renderer.domElement;
+    if (this.strokeCancelled) {
+      this.strokeCancelled = false;
+      this.controls.enabled = true;
+      release(canvas, event.pointerId);
+      return;
+    }
     if (this.stroke) {
+      if (event.pointerId !== this.stroke.pointerId) return;
       this.controls.enabled = true;
       release(canvas, event.pointerId);
       this.finishStroke();
@@ -1034,8 +1044,12 @@ class Stage3D {
     const context = this.ink.getContext('2d');
     if (!context) return;
     const scale = this.renderer.getPixelRatio();
-    context.setTransform(scale, 0, 0, scale, 0, 0);
+    // Se limpia en píxeles del dispositivo, sin la escala: con un zoom del
+    // navegador por debajo del 100 % la escala es menor que 1 y, aplicada dos
+    // veces, dejaría tinta sin borrar.
+    context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, this.ink.width, this.ink.height);
+    context.setTransform(scale, 0, 0, scale, 0, 0);
     const points = this.stroke?.points;
     if (!points || points.length === 0) return;
     context.strokeStyle = `#${this.colors.primary.getHexString()}`;
@@ -1120,9 +1134,13 @@ class Stage3D {
 
     if (this.drawing && key === 'escape') {
       event.preventDefault();
+      // Con un trazo a medias el puntero sigue pulsado: la órbita vuelve al
+      // soltar, no ahora, o la cámara arrancaría desde el trazo cancelado.
+      const midStroke = this.stroke !== null;
       this.stroke = null;
       this.paintStroke();
-      this.controls.enabled = true;
+      if (midStroke) this.strokeCancelled = true;
+      else this.controls.enabled = true;
       this.handlers.onDrawMode(null);
       return;
     }
