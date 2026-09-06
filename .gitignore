@@ -15,3 +15,4 @@ DESIGN.md
 *.local
 .env
 .env.*
+.superpowers/
