@@ -246,8 +246,12 @@ Press C for the knife and drag a line across the model: the cut becomes the plan
 that contains that line as seen from the camera, tilted however you drew it. The
 stroke is straightened to its two ends on purpose — a curved cut face doesn't
 print flat and gives a connector nothing to sit on. Press D with a window active
-and draw a loop around the part you want off: the loop replaces the rectangle,
-and the column that separates the part is that outline extruded along the cut.
+and click around the part on the model itself: each click drops a point on the
+surface, the points can be dragged along it, Backspace removes the last, and the
+closed loop is what the window becomes - its projection onto the plane replaces
+the rectangle, and the column that separates the part is that outline extruded
+along the cut. Drawing in the air was tried first and dropped: with nothing to
+land on, a stroke lands where the plane is, not where the eye says.
 Both compose — tilt with the knife, then draw the region — because the window
 lives in the plane's own frame rather than the world's axes. A plane that no
 longer sits on an axis is reported as "free, N° from Z", and pressing an axis

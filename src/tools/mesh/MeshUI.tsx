@@ -405,11 +405,11 @@ function CutCard({
             className={`cut-aim${drawing === 'lasso' ? ' is-on' : ''}`}
             aria-pressed={drawing === 'lasso'}
             disabled={!cut.window}
-            title={cut.window ? 'Dibuja el contorno de lo que se separa (D)' : 'Activa Recorte para dibujar un contorno'}
+            title={cut.window ? 'Contornea la pieza punto a punto: clic añade, arrastrar ajusta (D)' : 'Activa Recorte para contornear'}
             onClick={() => onDrawing(drawing === 'lasso' ? null : 'lasso')}
           >
             <PenIcon />
-            <span className="visually-hidden">Dibujar el contorno</span>
+            <span className="visually-hidden">Contornear la pieza</span>
           </button>
         </span>
       </header>
@@ -460,7 +460,7 @@ function CutCard({
 export function MeshStage(): ReactNode {
   const {
     parts, selectedId, select, exploded, setExploded, spread, setSpread,
-    cut, setCut, placeCut, setCutPlane, setCutOutline, moveCutWindow, volume, undo, canUndo,
+    cut, setCut, placeCut, setCutPlane, setCutAnchors, moveCutWindow, volume, undo, canUndo,
   } = useMesh();
   const [showVolume, setShowVolume] = useState(false);
   const [placing, setPlacing] = useState(false);
@@ -552,7 +552,7 @@ export function MeshStage(): ReactNode {
         drawing={drawing}
         onDrawMode={startDrawing}
         onKnife={setCutPlane}
-        onOutline={setCutOutline}
+        onAnchors={setCutAnchors}
         onCutPoint={placeCut}
         onMoveMode={setMoving}
         volume={volume}
@@ -575,7 +575,7 @@ export function MeshStage(): ReactNode {
         </p>
       ) : drawing === 'lasso' ? (
         <p className="mesh-mode" role="status">
-          Dibuja el contorno de lo que se separa · Esc cancela
+          Clic sobre la pieza añade un punto · arrástralos para ajustar · Retroceso quita el último · Esc termina
         </p>
       ) : placing ? (
         <p className="mesh-mode" role="status">
@@ -894,10 +894,16 @@ export function MeshPanel(): ReactNode {
                 ? 'Al máximo, el recorte llega hasta el final de la pieza: eso separa una extremidad entera. Bájalo para llevarte solo un trozo, como media pata.'
                 : `Se lleva solo los ${cut.window.depth} mm que siguen al plano; lo que haya más allá se queda.`}
             </p>
-            {cut.window.outline ? (
+            {cut.window.anchors ? (
               <p className="row-hint">
-                Contorno dibujado a mano, de {cut.window.outline.length} puntos. Tocar el ancho o el alto lo
-                descarta y vuelve al rectángulo; para cambiarlo, dibújalo otra vez.
+                {cut.window.anchors.length < 3
+                  ? `${cut.window.anchors.length} ${cut.window.anchors.length === 1 ? 'punto' : 'puntos'} sobre la pieza: un contorno necesita al menos tres. Pulsa D y sigue añadiendo.`
+                  : `Contorno de ${cut.window.anchors.length} puntos pegados a la pieza. Arrástralos sobre ella para ajustarlo; con D añades más. Tocar el ancho, el alto o el centro lo descarta.`}
+              </p>
+            ) : cut.window.outline ? (
+              <p className="row-hint">
+                Contorno de {cut.window.outline.length} puntos, ya sin anclas. Tocar el ancho o el alto lo
+                descarta y vuelve al rectángulo.
               </p>
             ) : null}
             {(['Ancho', 'Alto'] as const).map((label, i) => {
@@ -915,7 +921,7 @@ export function MeshPanel(): ReactNode {
                     const size: [number, number] = [...cut.window!.size];
                     size[i] = value;
                     // Pedir un tamaño es pedir un rectángulo: el contorno se va.
-                    setCut({ window: { ...cut.window!, size, outline: null } });
+                    setCut({ window: { ...cut.window!, size, outline: null, anchors: null } });
                   }}
                 />
               );

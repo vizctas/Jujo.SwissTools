@@ -43,6 +43,12 @@ export interface CutWindow {
    * contorno extruido y `center`/`size` son solo su caja; sin él, el rectángulo.
    */
   outline?: [number, number][] | null;
+  /**
+   * Los puntos del contorno, en coordenadas de la pieza y pegados a su
+   * superficie. `outline` es su proyección sobre el plano y se recalcula al
+   * cambiar la normal: lo que se edita son los puntos, no el contorno.
+   */
+  anchors?: [number, number, number][] | null;
 }
 
 /** Plano en el espacio de la pieza: normal unitaria y distancia desde el origen. */

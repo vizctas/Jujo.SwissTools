@@ -28,7 +28,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { bedClamp, restingZ, shift, type Box } from './layout.ts';
 import { cutFrame, type CutState, type Part, type Vec3 } from './store.tsx';
-import { planeFromRays, simplify, toPlane, type Basis } from './plane.ts';
+import { planeFromRays, simplify, type Basis } from './plane.ts';
 import type { CutWindow } from './protocol.ts';
 
 export interface ViewportProps {
@@ -54,8 +54,8 @@ export interface ViewportProps {
   onDrawMode: (mode: 'knife' | 'lasso' | null) => void;
   /** El cuchillo, ya en coordenadas de la pieza. */
   onKnife: (normal: Vec3, offset: number, partId: string) => void;
-  /** El lazo, en el marco (u, v) del plano actual. */
-  onOutline: (outline: [number, number][]) => void;
+  /** El lazo: los puntos del contorno, pegados a la pieza y en sus coordenadas. */
+  onAnchors: (anchors: Vec3[]) => void;
   volume: Vec3;
   showVolume: boolean;
 }
@@ -243,6 +243,11 @@ class Stage3D {
   private colors = { primary: new THREE.Color(), ink: new THREE.Color(), faint: new THREE.Color(), warn: new THREE.Color() };
   /** La pieza teñida con la vista previa del corte, para desteñirla al cambiar. */
   private previewed: Entry | null = null;
+  /** Los puntos del lazo, dibujados sobre la pieza: hijos de su malla, así viajan con ella. */
+  private anchorGroup: THREE.Group | null = null;
+  private anchorEntry: Entry | null = null;
+  private anchorSource: Vec3[] | null = null;
+  private anchorDrag: { index: number; pointerId: number } | null = null;
   private previewDirty = false;
 
   constructor(
@@ -255,7 +260,7 @@ class Stage3D {
       onMoveMode: (state: { active: boolean; axis: number | null }) => void;
       onDrawMode: (mode: 'knife' | 'lasso' | null) => void;
       onKnife: (normal: Vec3, offset: number, partId: string) => void;
-      onOutline: (outline: [number, number][]) => void;
+      onAnchors: (anchors: Vec3[]) => void;
     },
   ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
@@ -511,6 +516,7 @@ class Stage3D {
 
   private destroy(entry: Entry): void {
     if (this.previewed === entry) this.previewed = null;
+    if (this.anchorEntry === entry) this.syncAnchors(null, null);
     this.scene.remove(entry.mesh);
     entry.mesh.geometry.dispose();
     entry.mesh.material.dispose();
@@ -692,10 +698,12 @@ class Stage3D {
     const frame = this.planeFrame();
     if (!frame || !this.cut) {
       this.plane.visible = false;
+      this.syncAnchors(null, null);
       return;
     }
     const { entry, basis, box, offset } = frame;
     const window = this.cut.window;
+    this.syncAnchors(entry, window?.anchors ?? null);
 
     // Sin recorte, el plano se dibuja algo más grande que la pieza; con él, es la ventana.
     const width = window ? Math.max(0.5, window.size[0]) : Math.max(1, (box.u[1] - box.u[0]) * 1.15);
@@ -816,6 +824,72 @@ class Stage3D {
     entry.mesh.material.color.setRGB(...entry.part.color);
   }
 
+  /* ---------------------------------------------------------------- Lazo */
+
+  /**
+   * Los puntos del contorno, sobre la superficie de la pieza y unidos en bucle.
+   * Se cuelgan de la malla de la pieza para que se muevan con ella y se
+   * reconstruyen solo cuando cambian los puntos, no en cada fotograma.
+   */
+  private syncAnchors(entry: Entry | null, anchors: Vec3[] | null): void {
+    const source = anchors && anchors.length > 0 ? anchors : null;
+    if (this.anchorEntry === entry && this.anchorSource === source) return;
+    if (this.anchorGroup) {
+      this.anchorGroup.removeFromParent();
+      this.anchorGroup.traverse((object) => {
+        if (object instanceof THREE.Mesh || object instanceof THREE.LineLoop) {
+          object.geometry.dispose();
+          (object.material as THREE.Material).dispose();
+        }
+      });
+      this.anchorGroup = null;
+    }
+    this.anchorEntry = entry;
+    this.anchorSource = source;
+    if (!entry || !source) return;
+
+    const group = new THREE.Group();
+    // Sin prueba de profundidad: un punto un pelo bajo la superficie tiene que verse.
+    const radius = Math.max(0.35, this.sceneRadius * 0.012);
+    const geometry = new THREE.SphereGeometry(radius, 12, 8);
+    const material = new THREE.MeshBasicMaterial({ color: this.colors.primary, depthTest: false });
+    source.forEach((point, index) => {
+      const mark = new THREE.Mesh(geometry, material);
+      mark.position.set(point[0], point[1], point[2]);
+      mark.userData.anchor = index;
+      mark.renderOrder = 2;
+      group.add(mark);
+    });
+    if (source.length >= 2) {
+      const loop = new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints(source.map(vec)),
+        new THREE.LineBasicMaterial({ color: this.colors.primary, depthTest: false, transparent: true, opacity: 0.9 }),
+      );
+      loop.renderOrder = 1;
+      group.add(loop);
+    }
+    entry.mesh.add(group);
+    this.anchorGroup = group;
+  }
+
+  /** Qué punto del lazo hay bajo el puntero, si hay alguno. */
+  private pickAnchor(point: THREE.Vector2): number | null {
+    if (!this.anchorGroup) return null;
+    this.raycaster.setFromCamera(point, this.camera);
+    const marks = this.anchorGroup.children.filter((child): child is THREE.Mesh => child instanceof THREE.Mesh);
+    const hit = this.raycaster.intersectObjects(marks, false)[0];
+    return hit ? (hit.object.userData.anchor as number) : null;
+  }
+
+  /** Dónde toca el puntero la superficie de esta pieza, en coordenadas de la pieza. */
+  private pickOn(entry: Entry, point: THREE.Vector2): Vec3 | null {
+    this.raycaster.setFromCamera(point, this.camera);
+    const hit = this.raycaster.intersectObject(entry.mesh, false)[0];
+    if (!hit) return null;
+    const local = hit.point.sub(this.resolve(entry));
+    return [local.x, local.y, local.z];
+  }
+
   /* ------------------------------------------------------------- Puntero */
 
   private pointerFrom(event: PointerEvent): THREE.Vector2 {
@@ -874,6 +948,19 @@ class Stage3D {
       return;
     }
 
+    if (this.anchorDrag) {
+      if (event.pointerId !== this.anchorDrag.pointerId) return;
+      const frame = this.planeFrame();
+      const anchors = this.cut?.window?.anchors;
+      if (!frame || !anchors) return;
+      // El punto se desliza por la superficie: fuera de ella se queda donde estaba.
+      const local = this.pickOn(frame.entry, this.pointer);
+      if (!local) return;
+      const index = this.anchorDrag.index;
+      this.handlers.onAnchors(anchors.map((point, i) => (i === index ? local : point)));
+      return;
+    }
+
     if (this.windowDrag && this.cut?.window) {
       // El recorte se mueve sobre su propio plano, siguiendo al puntero 1:1.
       this.raycaster.setFromCamera(this.pointer, this.camera);
@@ -927,10 +1014,17 @@ class Stage3D {
     }
 
     if (event.pointerType !== 'mouse') return;
-    const overPlane = this.overPlane(this.pointer);
-    const hovered = overPlane ? null : this.pick(this.pointer);
+    const overAnchor = this.pickAnchor(this.pointer) !== null;
+    const overPlane = !overAnchor && this.overPlane(this.pointer);
+    const hovered = overAnchor || overPlane ? null : this.pick(this.pointer);
     const id = hovered?.entry.part.id ?? null;
-    this.renderer.domElement.style.cursor = overPlane ? 'grab' : id ? 'grab' : '';
+    this.renderer.domElement.style.cursor = this.drawing
+      ? overAnchor
+        ? 'grab'
+        : 'crosshair'
+      : overAnchor || overPlane || id
+        ? 'grab'
+        : '';
     if (id !== this.hoveredId) {
       this.hoveredId = id;
       this.invalidate();
@@ -949,7 +1043,31 @@ class Stage3D {
       return;
     }
 
-    // Dibujar: el trazo empieza aquí y la cámara se queda quieta hasta soltar.
+    // Un punto del lazo se arrastra por la superficie, esté o no el modo dibujo.
+    const anchor = this.cut?.window?.anchors ? this.pickAnchor(point) : null;
+    if (anchor !== null) {
+      this.pressAt = null;
+      this.anchorDrag = { index: anchor, pointerId: event.pointerId };
+      this.controls.enabled = false;
+      capture(this.renderer.domElement, event.pointerId);
+      this.renderer.domElement.style.cursor = 'grabbing';
+      return;
+    }
+
+    // Lazo: cada clic sobre la pieza añade un punto pegado a su superficie. No
+    // se dibuja en el aire a propósito: en el aire no hay manera de saber si el
+    // trazo cae donde uno cree.
+    if (this.drawing === 'lasso') {
+      this.pressAt = null;
+      const frame = this.planeFrame();
+      if (!frame) return;
+      const local = this.pickOn(frame.entry, point);
+      if (!local) return;
+      this.handlers.onAnchors([...(this.cut?.window?.anchors ?? []), local]);
+      return;
+    }
+
+    // Cuchillo: el trazo empieza aquí y la cámara se queda quieta hasta soltar.
     if (this.drawing) {
       this.pressAt = null;
       // Un trazo a la vez: el segundo dedo no empieza otro ni roba el primero.
@@ -1040,6 +1158,14 @@ class Stage3D {
       this.controls.enabled = true;
       release(canvas, event.pointerId);
       this.finishStroke();
+      return;
+    }
+    if (this.anchorDrag) {
+      if (event.pointerId !== this.anchorDrag.pointerId) return;
+      this.anchorDrag = null;
+      this.controls.enabled = true;
+      release(canvas, event.pointerId);
+      canvas.style.cursor = '';
       return;
     }
     if (this.windowDrag) {
@@ -1188,16 +1314,10 @@ class Stage3D {
     context.lineCap = 'round';
     context.lineJoin = 'round';
     context.beginPath();
-    if (this.drawing === 'knife') {
-      // El cuchillo es recto: se enseña la recta que va a cortar, no el garabato.
-      const [a, b] = [points[0]!, points[points.length - 1]!];
-      context.moveTo(a[0], a[1]);
-      context.lineTo(b[0], b[1]);
-    } else {
-      context.moveTo(points[0]![0], points[0]![1]);
-      for (const [x, y] of points.slice(1)) context.lineTo(x, y);
-      if (points.length >= 3) context.closePath();
-    }
+    // El cuchillo es recto: se enseña la recta que va a cortar, no el garabato.
+    const [a, b] = [points[0]!, points[points.length - 1]!];
+    context.moveTo(a[0], a[1]);
+    context.lineTo(b[0], b[1]);
     context.stroke();
   }
 
@@ -1207,10 +1327,10 @@ class Stage3D {
     const frame = this.planeFrame();
     this.stroke = null;
     this.paintStroke();
-    if (!stroke || !frame) return;
-    const { entry, basis } = frame;
+    if (!stroke || !frame || this.drawing !== 'knife') return;
+    const { entry } = frame;
 
-    if (this.drawing === 'knife') {
+    {
       const a = stroke.points[0]!;
       const b = stroke.points[stroke.points.length - 1]!;
       // Dos puntos casi iguales no son una línea: se ignora y se sigue en modo.
@@ -1234,20 +1354,6 @@ class Stage3D {
       return;
     }
 
-    // Lazo: cada punto del trazo, proyectado sobre el plano actual y pasado a (u, v).
-    const surface = new THREE.Plane().setFromNormalAndCoplanarPoint(vec(basis.n), this.plane.position);
-    const placed = this.resolve(entry);
-    const outline: [number, number][] = [];
-    for (const pixel of stroke.points) {
-      this.raycaster.setFromCamera(this.ndcFrom(pixel), this.camera);
-      const hit = new THREE.Vector3();
-      if (!this.raycaster.ray.intersectPlane(surface, hit)) continue;
-      const local = hit.sub(placed);
-      outline.push(toPlane([local.x, local.y, local.z], basis));
-    }
-    if (outline.length < 3) return;
-    this.handlers.onOutline(outline);
-    this.handlers.onDrawMode(null);
   }
 
   /** El punto del corte en coordenadas del modelo: el plano menos la separación. */
@@ -1269,6 +1375,15 @@ class Stage3D {
       // soltar, no ahora, o la cámara arrancaría desde el trazo cancelado.
       this.cancelStroke();
       this.handlers.onDrawMode(null);
+      return;
+    }
+
+    // Con el lazo, Retroceso quita el último punto: equivocarse tiene que ser barato.
+    if (this.drawing === 'lasso' && (key === 'backspace' || key === 'delete')) {
+      const anchors = this.cut?.window?.anchors;
+      if (!anchors || anchors.length === 0) return;
+      event.preventDefault();
+      this.handlers.onAnchors(anchors.slice(0, -1));
       return;
     }
 
@@ -1370,7 +1485,7 @@ export function Viewport(props: ViewportProps): ReactNode {
     onMoveMode: props.onMoveMode,
     onDrawMode: props.onDrawMode,
     onKnife: props.onKnife,
-    onOutline: props.onOutline,
+    onAnchors: props.onAnchors,
   });
   handlers.current = {
     onSelect: props.onSelect,
@@ -1380,7 +1495,7 @@ export function Viewport(props: ViewportProps): ReactNode {
     onMoveMode: props.onMoveMode,
     onDrawMode: props.onDrawMode,
     onKnife: props.onKnife,
-    onOutline: props.onOutline,
+    onAnchors: props.onAnchors,
   };
   const [unsupported, setUnsupported] = useState(false);
 
@@ -1395,7 +1510,7 @@ export function Viewport(props: ViewportProps): ReactNode {
         onMoveMode: (state) => handlers.current.onMoveMode(state),
         onDrawMode: (mode) => handlers.current.onDrawMode(mode),
         onKnife: (normal, offset, partId) => handlers.current.onKnife(normal, offset, partId),
-        onOutline: (outline) => handlers.current.onOutline(outline),
+        onAnchors: (anchors) => handlers.current.onAnchors(anchors),
       });
     } catch {
       setUnsupported(true);

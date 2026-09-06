@@ -139,7 +139,11 @@ function defaultWindow(part: Part, normal: Vec3): CutWindow {
   };
 }
 
-/** Lleva la ventana a otro centro; con contorno, el contorno viaja con ella. */
+/**
+ * Lleva la ventana a otro centro; con contorno, el contorno viaja con ella. Los
+ * puntos anclados no: están pegados a la superficie y moverlos por el plano
+ * los despegaría, así que se sueltan y queda solo el contorno.
+ */
 function movedWindow(window: CutWindow, center: [number, number]): CutWindow {
   const du = center[0] - window.center[0];
   const dv = center[1] - window.center[1];
@@ -147,7 +151,28 @@ function movedWindow(window: CutWindow, center: [number, number]): CutWindow {
     ...window,
     center,
     outline: window.outline ? window.outline.map(([u, v]) => [u + du, v + dv] as [number, number]) : window.outline,
+    anchors: null,
   };
+}
+
+/**
+ * La ventana que describen unos puntos pegados a la pieza: su proyección sobre
+ * el plano. Con menos de tres no hay contorno y manda el rectángulo, pero los
+ * puntos se guardan para seguir añadiendo.
+ */
+function windowFromAnchors(anchors: Vec3[], normal: Vec3, base: CutWindow | null, part: Part): CutWindow {
+  const fallback = base ?? defaultWindow(part, normal);
+  if (anchors.length < 3) {
+    return { ...fallback, outline: null, anchors: anchors.length > 0 ? anchors : null };
+  }
+  const basis = planeBasis(normal);
+  const outline = anchors.map((point) => toPlane(point, basis));
+  return { side: fallback.side, depth: fallback.depth ?? null, ...outlineBounds(outline), outline, anchors };
+}
+
+/** La ventana al cambiar de normal: los puntos se reproyectan; sin puntos, se estrena. */
+function reframedWindow(window: CutWindow, normal: Vec3, part: Part): CutWindow {
+  return window.anchors ? windowFromAnchors(window.anchors, normal, window, part) : defaultWindow(part, normal);
 }
 export interface JointState extends JointSpec {
   enabled: boolean;
@@ -233,8 +258,11 @@ interface MeshStore {
   placeCut: (point: Vec3, partId: string) => void;
   /** El cuchillo: un plano cualquiera, en coordenadas de la pieza. La ventana se estrena sobre él. */
   setCutPlane: (normal: Vec3, offset: number, partId: string) => void;
-  /** El lazo: un contorno cerrado en (u, v) que sustituye al rectángulo del recorte. */
-  setCutOutline: (outline: [number, number][]) => void;
+  /**
+   * El lazo: puntos pegados a la superficie de la pieza elegida, en sus
+   * coordenadas. Su proyección sobre el plano es el contorno del recorte.
+   */
+  setCutAnchors: (anchors: Vec3[]) => void;
   /** Mueve la ventana (y su contorno, si lo hay) a otro centro. */
   moveCutWindow: (center: [number, number]) => void;
   /** Cuellos encontrados en la pieza elegida: propuestas de corte, no cortes. */
@@ -988,7 +1016,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
           // Al cambiar de plano, la ventana vieja hablaba de otro marco.
           if (changes.normal && !sameNormal(changes.normal, current.normal) && next.window) {
             const part = partsRef.current.find((candidate) => candidate.id === selectedId);
-            next.window = part ? defaultWindow(part, next.normal) : null;
+            next.window = part ? reframedWindow(next.window, next.normal, part) : null;
           }
           return next;
         }),
@@ -1021,19 +1049,15 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
         setCutState((current) => ({
           normal: oriented,
           position: span > 0 ? Math.min(1, Math.max(0, (signed - box.n[0]) / span)) : 0.5,
-          window: current.window ? defaultWindow(part, oriented) : null,
+          window: current.window ? reframedWindow(current.window, oriented, part) : null,
         }));
       },
-      setCutOutline: (outline) => {
-        if (outline.length < 3) return;
+      setCutAnchors: (anchors) => {
+        const part = partsRef.current.find((candidate) => candidate.id === selectedId);
+        if (!part) return;
         setCutState((current) => ({
           ...current,
-          window: {
-            side: current.window?.side ?? 1,
-            depth: current.window?.depth ?? null,
-            ...outlineBounds(outline),
-            outline,
-          },
+          window: windowFromAnchors(anchors, current.normal, current.window, part),
         }));
       },
       moveCutWindow: (center) =>
