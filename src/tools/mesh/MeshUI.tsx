@@ -25,6 +25,7 @@ import {
   PenIcon,
   TargetIcon,
   TrashIcon,
+  UndoIcon,
   UploadIcon,
 } from '../../components/Icons.tsx';
 import type { ColorSource } from './load.ts';
@@ -279,7 +280,7 @@ function LayerRow({ part, index }: { part: Part; index: number }): ReactNode {
 }
 
 function Layers(): ReactNode {
-  const { parts } = useMesh();
+  const { parts, undo, canUndo } = useMesh();
   const [open, setOpen] = useState(true);
 
   // Agrupadas por el objeto del que salieron, en el orden en que aparecen.
@@ -308,6 +309,16 @@ function Layers(): ReactNode {
         <span className="layers-tally value" title="Piezas cerradas">
           {closed}/{parts.length}
         </span>
+        <button
+          type="button"
+          className="cut-aim"
+          disabled={!canUndo}
+          title={canUndo ? 'Deshacer la última operación (Ctrl+Z)' : 'Nada que deshacer'}
+          onClick={undo}
+        >
+          <UndoIcon />
+          <span className="visually-hidden">Deshacer</span>
+        </button>
       </h2>
       <div className="layers-body">
         <ul className="layers-list">
@@ -449,7 +460,7 @@ function CutCard({
 export function MeshStage(): ReactNode {
   const {
     parts, selectedId, select, exploded, setExploded, spread, setSpread,
-    cut, setCut, placeCut, setCutPlane, setCutOutline, moveCutWindow, volume,
+    cut, setCut, placeCut, setCutPlane, setCutOutline, moveCutWindow, volume, undo, canUndo,
   } = useMesh();
   const [showVolume, setShowVolume] = useState(false);
   const [placing, setPlacing] = useState(false);
@@ -482,8 +493,16 @@ export function MeshStage(): ReactNode {
     const onKey = (event: KeyboardEvent): void => {
       const target = event.target;
       const typing = target instanceof Element && target.closest('input, textarea, select, [contenteditable]');
-      if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (typing) return;
       const key = event.key.toLowerCase();
+      // Ctrl+Z (Cmd+Z en Mac) deshace la última operación sobre las piezas.
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && key === 'z') {
+        if (!canUndo) return;
+        event.preventDefault();
+        undo();
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (key === 'e') {
         event.preventDefault();
         setExploded(!exploded);
@@ -500,7 +519,7 @@ export function MeshStage(): ReactNode {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [parts.length, exploded, setExploded, selectedId, hasWindow, moving.active]);
+  }, [parts.length, exploded, setExploded, selectedId, hasWindow, moving.active, undo, canUndo]);
 
   if (parts.length === 0) {
     return (

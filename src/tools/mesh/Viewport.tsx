@@ -29,6 +29,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { bedClamp, restingZ, shift, type Box } from './layout.ts';
 import { cutFrame, type CutState, type Part, type Vec3 } from './store.tsx';
 import { planeFromRays, simplify, toPlane, type Basis } from './plane.ts';
+import type { CutWindow } from './protocol.ts';
 
 export interface ViewportProps {
   parts: Part[];
@@ -139,6 +140,28 @@ interface Entry {
 
 const vec = (v: Vec3): THREE.Vector3 => new THREE.Vector3(v[0], v[1], v[2]);
 
+/**
+ * Si un punto (u, v) del plano cae dentro de la ventana: el rectángulo, o el
+ * contorno por paridad, que es la misma regla con la que se extruye la columna.
+ */
+function insideWindow(window: CutWindow): (u: number, v: number) => boolean {
+  const outline = window.outline;
+  if (outline && outline.length >= 3) {
+    return (u, v) => {
+      let inside = false;
+      for (let i = 0, j = outline.length - 1; i < outline.length; j = i++) {
+        const [ui, vi] = outline[i]!;
+        const [uj, vj] = outline[j]!;
+        if (vi > v !== vj > v && u < ((uj - ui) * (v - vi)) / (vj - vi) + ui) inside = !inside;
+      }
+      return inside;
+    };
+  }
+  const [cu, cv] = window.center;
+  const [w, h] = window.size;
+  return (u, v) => Math.abs(u - cu) <= w / 2 && Math.abs(v - cv) <= h / 2;
+}
+
 /** Distancia en pantalla (coordenadas normalizadas) a partir de la cual un clic es un arrastre. */
 const DRAG_THRESHOLD = 0.012;
 
@@ -217,7 +240,10 @@ class Stage3D {
   private pressAt: THREE.Vector2 | null = null;
   private resize: ResizeObserver;
   private themeWatch: MutationObserver;
-  private colors = { primary: new THREE.Color(), ink: new THREE.Color(), faint: new THREE.Color() };
+  private colors = { primary: new THREE.Color(), ink: new THREE.Color(), faint: new THREE.Color(), warn: new THREE.Color() };
+  /** La pieza teñida con la vista previa del corte, para desteñirla al cambiar. */
+  private previewed: Entry | null = null;
+  private previewDirty = false;
 
   constructor(
     private container: HTMLElement,
@@ -310,6 +336,8 @@ class Stage3D {
     this.colors.primary = cssColor('--primary', '#4f5bd5');
     this.colors.ink = cssColor('--ink', '#1a1b22');
     this.colors.faint = cssColor('--faint', '#9a9ca8');
+    this.colors.warn = cssColor('--warning', '#a8731a');
+    this.previewDirty = true;
     this.plane.material.color.copy(this.colors.primary);
     (this.planeEdges.material as THREE.LineBasicMaterial).color.copy(this.colors.primary);
     if (this.windowBox) (this.windowBox.material as THREE.LineBasicMaterial).color.copy(this.colors.primary);
@@ -482,6 +510,7 @@ class Stage3D {
   }
 
   private destroy(entry: Entry): void {
+    if (this.previewed === entry) this.previewed = null;
     this.scene.remove(entry.mesh);
     entry.mesh.geometry.dispose();
     entry.mesh.material.dispose();
@@ -658,7 +687,8 @@ class Stage3D {
     return { entry, basis, box, offset: box.n[0] + this.cut.position * (box.n[1] - box.n[0]) };
   }
 
-  private updatePlane(): void {
+  private updatePlane(repaint = true): void {
+    if (repaint) this.previewDirty = true;
     const frame = this.planeFrame();
     if (!frame || !this.cut) {
       this.plane.visible = false;
@@ -706,6 +736,84 @@ class Stage3D {
       this.windowBox.visible = false;
     }
     this.plane.visible = true;
+  }
+
+  /* --------------------------------------------------------- Vista previa */
+
+  /**
+   * Tiñe la pieza elegida según lo que va a salir del corte: lo que se separa
+   * en un color y lo que queda en otro. Se decide vértice a vértice con la misma
+   * regla que la columna de recorte —lado de la normal, dentro de la ventana,
+   * dentro de la profundidad—, así que lo que se ve es lo que se va a cortar,
+   * salvo en los triángulos que cruzan el plano. Devuelve si algo cambió.
+   */
+  private paintPreview(): boolean {
+    const frame = this.plane.visible && this.cut ? this.planeFrame() : null;
+    let changed = false;
+    if (this.previewed && this.previewed !== frame?.entry) {
+      this.clearPreview(this.previewed);
+      this.previewed = null;
+      changed = true;
+    }
+    if (!frame || !this.cut) return changed;
+
+    const { entry, basis, offset } = frame;
+    const window = this.cut.window;
+    const geometry = entry.mesh.geometry;
+    const positions = geometry.getAttribute('position') as THREE.BufferAttribute;
+    let colors = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (!colors || colors.count !== positions.count) {
+      colors = new THREE.BufferAttribute(new Float32Array(positions.count * 3), 3);
+      geometry.setAttribute('color', colors);
+    }
+
+    // Dos tintes sobre el color de la pieza, para que siga siendo esa pieza.
+    const base = new THREE.Color().setRGB(...entry.part.color);
+    const leaves = base.clone().lerp(this.colors.primary, 0.6);
+    const stays = base.clone().lerp(this.colors.warn, 0.45);
+    const [nx, ny, nz] = basis.n;
+    const [ux, uy, uz] = basis.u;
+    const [vx, vy, vz] = basis.v;
+    const side = window?.side ?? 1;
+    const depth = window?.depth ?? null;
+    const inside = window ? insideWindow(window) : null;
+    const source = positions.array as Float32Array;
+    const target = colors.array as Float32Array;
+    for (let i = 0; i < positions.count; i += 1) {
+      const x = source[i * 3]!;
+      const y = source[i * 3 + 1]!;
+      const z = source[i * 3 + 2]!;
+      const s = x * nx + y * ny + z * nz - offset;
+      let separates: boolean;
+      if (!inside) {
+        separates = s > 0;
+      } else {
+        const along = side * s;
+        separates =
+          along > 0 &&
+          (depth === null || along <= depth) &&
+          inside(x * ux + y * uy + z * uz, x * vx + y * vy + z * vz);
+      }
+      const tint = separates ? leaves : stays;
+      target[i * 3] = tint.r;
+      target[i * 3 + 1] = tint.g;
+      target[i * 3 + 2] = tint.b;
+    }
+    colors.needsUpdate = true;
+    if (!entry.mesh.material.vertexColors) {
+      // Cambiar esto recompila el shader: solo al entrar y salir de la vista previa.
+      entry.mesh.material.vertexColors = true;
+      entry.mesh.material.needsUpdate = true;
+    }
+    entry.mesh.material.color.setRGB(1, 1, 1);
+    this.previewed = entry;
+    return true;
+  }
+
+  private clearPreview(entry: Entry): void {
+    entry.mesh.material.vertexColors = false;
+    entry.mesh.material.needsUpdate = true;
+    entry.mesh.material.color.setRGB(...entry.part.color);
   }
 
   /* ------------------------------------------------------------- Puntero */
@@ -813,7 +921,7 @@ class Stage3D {
       if (!this.raycaster.ray.intersectPlane(drag.ground, hit)) return;
       drag.entry.manual.copy(drag.startManual).add(hit.sub(drag.startHit));
       this.place(drag.entry);
-      if (drag.entry.part.id === this.selectedId) this.updatePlane();
+      if (drag.entry.part.id === this.selectedId) this.updatePlane(false);
       this.invalidate();
       return;
     }
@@ -1011,7 +1119,12 @@ class Stage3D {
         animating = true;
       }
     }
-    if (animating && this.plane.visible) this.updatePlane();
+    if (animating && this.plane.visible) this.updatePlane(false);
+
+    if (this.previewDirty) {
+      this.previewDirty = false;
+      if (this.paintPreview()) this.dirty = true;
+    }
 
     const moved = this.controls.update();
     if (moved || animating || this.dirty) {

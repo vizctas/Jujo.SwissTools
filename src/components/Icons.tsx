@@ -213,6 +213,13 @@ export const KnifeIcon = (props: IconProps): ReactNode => (
   </Icon>
 );
 
+export const UndoIcon = (props: IconProps): ReactNode => (
+  <Icon {...props}>
+    <path d="M6 4 2.5 7.5 6 11" />
+    <path d="M2.5 7.5H10a3.5 3.5 0 0 1 0 7H7" />
+  </Icon>
+);
+
 export const PenIcon = (props: IconProps): ReactNode => (
   <Icon {...props}>
     <path d="M3 13c2-6 5-9 8-10" />

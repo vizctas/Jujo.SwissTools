@@ -1,14 +1,29 @@
-import { CubeIcon, DownloadIcon, TrashIcon } from '../../components/Icons.tsx';
+import { CubeIcon, DownloadIcon, TrashIcon, UndoIcon } from '../../components/Icons.tsx';
 import type { PaletteCommand, ToolCommandContext } from '../types.ts';
 import { useMesh } from './store.tsx';
 
 /** Lo que el taller de mallas aporta a la navaja. */
 export function useMeshCommands({ close, activate }: ToolCommandContext): PaletteCommand[] {
-  const { parts, exportAll, clear, exploded, setExploded, repair, format } = useMesh();
+  const { parts, exportAll, clear, exploded, setExploded, repair, format, undo, canUndo } = useMesh();
   const commands: PaletteCommand[] = [];
   if (parts.length === 0) return commands;
 
   const broken = parts.filter((part) => !part.topology.watertight).length;
+
+  if (canUndo) {
+    commands.push({
+      id: 'mesh-undo',
+      group: 'Acciones',
+      label: 'Deshacer la última operación',
+      hint: 'Ctrl+Z. Corte, base, reparación, separación o borrado.',
+      icon: <UndoIcon />,
+      run: () => {
+        activate();
+        undo();
+        close();
+      },
+    });
+  }
 
   commands.push({
     id: 'mesh-export-all',

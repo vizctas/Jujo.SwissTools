@@ -474,7 +474,8 @@
   gap: var(--space-1);
   margin-inline-start: auto;
 }
-.cut-gestures .cut-aim {
+.cut-gestures .cut-aim,
+.layers-head .cut-aim {
   margin-inline-start: 0;
 }
 .cut-aim:disabled {

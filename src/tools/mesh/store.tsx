@@ -109,6 +109,9 @@ export interface CutState {
 
 export const AXIS_NORMALS: Record<Axis, Vec3> = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
 
+/** Pasos que se pueden deshacer. Más allá, el error ya es de hace un rato. */
+const HISTORY_LIMIT = 20;
+
 /** Sobre qué eje cae la normal, o `null` si el plano es libre. */
 export function axisOf(normal: Vec3): Axis | null {
   if (normal[0] > 0.9999) return 'x';
@@ -201,6 +204,9 @@ interface MeshStore {
   clear: () => void;
   removePart: (id: string) => void;
   setPartColor: (id: string, hex: string) => void;
+  /** Vuelve a como estaban las piezas antes de la última operación. */
+  undo: () => void;
+  canUndo: boolean;
 
   engine: EngineStatus;
   busy: string | null;
@@ -423,6 +429,24 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
   const colorCounter = useRef(0);
   const partsRef = useRef(parts);
   partsRef.current = parts;
+  const selectedRef = useRef(selectedId);
+  selectedRef.current = selectedId;
+
+  /*
+   * Deshacer: instantáneas de la bandeja antes de cada operación que la cambia.
+   * Las piezas son inmutables, así que guardar la lista es guardar referencias,
+   * no copias: veinte pasos atrás cuestan lo mismo que uno.
+   */
+  const history = useRef<{ parts: Part[]; selectedId: string | null; label: string }[]>([]);
+  const [undoDepth, setUndoDepth] = useState(0);
+  const remember = useCallback((label: string) => {
+    history.current = [...history.current.slice(-(HISTORY_LIMIT - 1)), { parts: partsRef.current, selectedId: selectedRef.current, label }];
+    setUndoDepth(history.current.length);
+  }, []);
+  const forget = useCallback(() => {
+    history.current = [];
+    setUndoDepth(0);
+  }, []);
 
   const nextColor = (): Rgb => PALETTE[colorCounter.current++ % PALETTE.length]!;
 
@@ -483,12 +507,13 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
 
   /** Sustituye una pieza por varias, manteniendo su sitio en la bandeja. */
   const replace = useCallback(
-    (id: string, replacements: Part[]) => {
+    (id: string, replacements: Part[], label: string) => {
+      remember(label);
       setParts((current) => current.flatMap((part) => (part.id === id ? replacements : [part])));
       setSelectedId((current) => (current === id ? (replacements[0]?.id ?? null) : current));
       for (const part of replacements) void analyze(part);
     },
-    [analyze],
+    [analyze, remember],
   );
 
   /* ----------------------------------------------------------------- Carga */
@@ -523,6 +548,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
           colorSource: loaded.colorSource,
           notes: loaded.notes,
         });
+        forget();
         setParts(created);
         setSelectedId(created[0]?.id ?? null);
         // Nada que abrir todavía: separar mueve las piezas de un corte, no objetos
@@ -567,11 +593,12 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
       setNotice('Cada pieza ya es una sola isla: no hay nada más que separar.');
       return;
     }
+    remember('la detección de objetos');
     setParts(next);
     setSelectedId(next[0]?.id ?? null);
     setNotice(`${next.length} objetos.${grouped > 0 ? ` ${grouped} islas diminutas agrupadas.` : ''}`);
     for (const part of next) void analyze(part);
-  }, [analyze]);
+  }, [analyze, remember]);
 
   const separateByColor = useCallback(() => {
     let produced = 0;
@@ -593,6 +620,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
       setNotice('No hay más de un color en ninguna pieza.');
       return;
     }
+    remember('la separación por color');
     setParts(next);
     setSelectedId(next[0]?.id ?? null);
     setExploded(true);
@@ -645,6 +673,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
         setNotice('Nada que reparar: todo está cerrado y bien orientado.');
         return;
       }
+      remember('la reparación');
       setParts(next);
       const stillOpen = touched.filter((part) => !part.topology.watertight).length;
       setNotice(
@@ -708,7 +737,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
       const pins = reply.pins.map((pin, i) =>
         makePart(`${part.name} · conector ${i + 1}`, pin, PIN_COLOR, 'pin', null, part.family),
       );
-      replace(part.id, [...halves, ...pins]);
+      replace(part.id, [...halves, ...pins], 'el corte');
       setExploded(true);
       setNotice([`Cortada en ${halves.length}.`, describeJoints(reply.joints)].filter(Boolean).join(' '));
     } finally {
@@ -758,7 +787,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
         );
         produced += pieces.length;
         reports.push(...reply.joints);
-        replace(part.id, [...pieces, ...pins]);
+        replace(part.id, [...pieces, ...pins], 'el corte a medida');
       }
       if (produced > 0) {
         setExploded(true);
@@ -836,7 +865,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
       }
       if (reply.t !== 'mesh') return;
       const withBase = { ...makePart(part.name, reply.mesh, part.color, part.origin, part.sampler, part.family), id: part.id };
-      replace(part.id, [withBase]);
+      replace(part.id, [withBase], 'la base');
       setNotice(`Base de ${base.height} mm unida a ${part.name}.`);
     } finally {
       setBusy(null);
@@ -899,6 +928,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
       },
       load,
       clear: () => {
+        forget();
         setModel(null);
         setParts([]);
         setSelectedId(null);
@@ -907,10 +937,26 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
         setExploded(false);
       },
       removePart: (id) => {
+        remember('el borrado de la pieza');
         setParts((current) => current.filter((part) => part.id !== id));
         setSelectedId((current) => (current === id ? null : current));
       },
-      setPartColor: (id, hex) => patch(id, { color: hexToRgb(hex) }),
+      setPartColor: (id, hex) => {
+        remember('el color');
+        patch(id, { color: hexToRgb(hex) });
+      },
+      undo: () => {
+        const last = history.current.pop();
+        setUndoDepth(history.current.length);
+        if (!last) return;
+        setParts(last.parts);
+        setSelectedId(last.selectedId);
+        // La ventana hablaba de la pieza que había: se reestrena sobre la que vuelve.
+        const part = last.parts.find((candidate) => candidate.id === last.selectedId);
+        setCutState((current) => (current.window && part ? { ...current, window: defaultWindow(part, current.normal) } : current));
+        setNotice(`Deshecho: ${last.label}.`);
+      },
+      canUndo: undoDepth > 0,
 
       engine,
       busy,
@@ -1026,7 +1072,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
       model, parts, selectedId, load, patch, engine, busy, error, notice,
       detectObjects, separateByColor, repair, volume, fits, cut, joint, base,
       cutSelected, autosplit, addBase, appendages, findAppendages, useAppendage,
-      exploded, spread, format, exportPart, exportAll, exporting,
+      exploded, spread, format, exportPart, exportAll, exporting, undoDepth, remember, forget,
     ],
   );
 

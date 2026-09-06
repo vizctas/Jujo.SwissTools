@@ -230,6 +230,14 @@ on the model, because "to the end of the piece" and "just this much" look far to
 alike until you can see where the cut stops. The connector is then sized to that
 window rather than to the whole cross-section.
 
+**You see the cut before you make it.** While the plane is being placed, the
+selected piece is tinted in two tones: what will come away in one, what stays in
+the other, decided per vertex with the same rule the cut column uses - side of the
+normal, inside the window, within the depth. It follows the drag in real time
+without a round trip to the worker. And there is undo: Ctrl+Z, the arrow next to
+the piece count, or the palette, walks back the last twenty operations - cuts,
+bases, repairs, separations, deletions, colours.
+
 **Five ways to aim it, because dragging a small rectangle is not one of them.**
 Type the millimetres, or turn on the crosshair and click the model where the cut
 should go, or press M and then X, Y or Z to slide it along one locked axis with
