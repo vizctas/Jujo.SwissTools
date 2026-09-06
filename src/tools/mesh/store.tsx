@@ -39,6 +39,7 @@ import {
   type Topology,
 } from './geometry.ts';
 import { LoadError, loadModel, type ColorSource } from './load.ts';
+import { orient, outlineBounds, planeBasis, projectBox, toPlane, type Basis, type Vec2 } from './plane.ts';
 import { PRINTERS, type Vec3 } from './printers.ts';
 import type {
   Appendage,
@@ -92,33 +93,57 @@ export type EngineStatus =
   | { kind: 'failed'; message: string };
 
 export type Axis = 'x' | 'y' | 'z';
+
 export interface CutState {
-  axis: Axis;
-  /** Fracción 0–1 a lo largo de la caja de la pieza. */
+  /** Normal unitaria del plano, en coordenadas de la pieza. Los ejes son un caso particular. */
+  normal: Vec3;
+  /** Fracción 0–1 a lo largo de la normal, entre el mínimo y el máximo de la pieza proyectada. */
   position: number;
   /**
-   * Recorte: el rectángulo sobre el plano dentro del cual se corta, en los dos
-   * ejes distintos al del corte. `null` = el plano entero, que parte todo lo que
-   * cruza. Con ventana se separa un brazo sin tocar lo que haya detrás.
+   * Recorte: lo que, sobre el plano, se corta; en el marco (u, v) del propio
+   * plano. `null` = el plano entero, que parte todo lo que cruza. Con ventana se
+   * separa un brazo sin tocar lo que haya detrás.
    */
   window: CutWindow | null;
 }
 
-/** Los dos ejes del mundo que no son el del corte, en orden ascendente. */
-export function crossAxes(axis: Axis): [number, number] {
-  const cut = AXIS_INDEX[axis];
-  const rest = [0, 1, 2].filter((i) => i !== cut);
-  return [rest[0]!, rest[1]!];
+export const AXIS_NORMALS: Record<Axis, Vec3> = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+
+/** Sobre qué eje cae la normal, o `null` si el plano es libre. */
+export function axisOf(normal: Vec3): Axis | null {
+  if (normal[0] > 0.9999) return 'x';
+  if (normal[1] > 0.9999) return 'y';
+  if (normal[2] > 0.9999) return 'z';
+  return null;
 }
 
-/** Ventana de partida: medio ancho de la pieza, centrada en ella. */
-function defaultWindow(part: Part, axis: Axis): CutWindow {
-  const [i, j] = crossAxes(axis);
+/** El marco del plano sobre una pieza y los rangos de su caja en él. */
+export function cutFrame(part: Part, normal: Vec3): { basis: Basis; box: { u: Vec2; v: Vec2; n: Vec2 } } {
+  const basis = planeBasis(normal);
+  return { basis, box: projectBox(part.bounds.min, part.bounds.max, basis) };
+}
+
+const sameNormal = (a: Vec3, b: Vec3): boolean => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) < 1e-6;
+
+/** Ventana de partida: medio ancho de la pieza sobre el plano, centrada en ella. */
+function defaultWindow(part: Part, normal: Vec3): CutWindow {
+  const { box } = cutFrame(part, normal);
   return {
-    center: [part.bounds.center[i]!, part.bounds.center[j]!],
-    size: [Math.max(1, part.bounds.size[i]! * 0.5), Math.max(1, part.bounds.size[j]! * 0.5)],
+    center: [(box.u[0] + box.u[1]) / 2, (box.v[0] + box.v[1]) / 2],
+    size: [Math.max(1, (box.u[1] - box.u[0]) * 0.5), Math.max(1, (box.v[1] - box.v[0]) * 0.5)],
     side: 1,
     depth: null,
+  };
+}
+
+/** Lleva la ventana a otro centro; con contorno, el contorno viaja con ella. */
+function movedWindow(window: CutWindow, center: [number, number]): CutWindow {
+  const du = center[0] - window.center[0];
+  const dv = center[1] - window.center[1];
+  return {
+    ...window,
+    center,
+    outline: window.outline ? window.outline.map(([u, v]) => [u + du, v + dv] as [number, number]) : window.outline,
   };
 }
 export interface JointState extends JointSpec {
@@ -150,7 +175,6 @@ export type ExportFormat = 'stl' | 'obj' | '3mf';
 export type { Vec3 };
 
 const VOLUME_KEY = 'jujo:mesh:volume';
-const AXIS_INDEX: Record<Axis, number> = { x: 0, y: 1, z: 2 };
 
 /** Colores de filamento, no de interfaz: se ven sobre la mesa en claro y oscuro. */
 const PALETTE: Rgb[] = [
@@ -196,11 +220,17 @@ interface MeshStore {
   /** Enciende o apaga el recorte, estrenándolo sobre la pieza elegida. */
   setCutWindow: (on: boolean) => void;
   /**
-   * Lleva el corte a un punto del modelo: la posición sobre su eje y, si hay
+   * Lleva el corte a un punto del modelo: la posición sobre su normal y, si hay
    * recorte, el centro de la ventana. Es lo que hacen el clic para colocar y el
    * movimiento con eje bloqueado, que por dentro son el mismo gesto.
    */
   placeCut: (point: Vec3, partId: string) => void;
+  /** El cuchillo: un plano cualquiera, en coordenadas de la pieza. La ventana se estrena sobre él. */
+  setCutPlane: (normal: Vec3, offset: number, partId: string) => void;
+  /** El lazo: un contorno cerrado en (u, v) que sustituye al rectángulo del recorte. */
+  setCutOutline: (outline: [number, number][]) => void;
+  /** Mueve la ventana (y su contorno, si lo hay) a otro centro. */
+  moveCutWindow: (center: [number, number]) => void;
   /** Cuellos encontrados en la pieza elegida: propuestas de corte, no cortes. */
   appendages: Appendage[];
   findAppendages: () => Promise<void>;
@@ -370,7 +400,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [volume, setVolumeState] = useState<Vec3>(readVolume);
-  const [cut, setCutState] = useState<CutState>({ axis: 'z', position: 0.5, window: null });
+  const [cut, setCutState] = useState<CutState>({ normal: [0, 0, 1], position: 0.5, window: null });
   const [joint, setJointState] = useState<JointState>({
     enabled: true,
     mode: 'dowel',
@@ -636,12 +666,10 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
   /* ------------------------------------------------------------- Booleanas */
 
   const planeFor = (part: Part, state: CutState): Plane => {
-    const axis = AXIS_INDEX[state.axis];
-    const normal: Vec3 = [0, 0, 0];
-    normal[axis] = 1;
+    const { box } = cutFrame(part, state.normal);
     return {
-      normal,
-      offset: part.bounds.min[axis]! + state.position * part.bounds.size[axis]!,
+      normal: state.normal,
+      offset: box.n[0] + state.position * (box.n[1] - box.n[0]),
       window: state.window,
     };
   };
@@ -774,10 +802,12 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
       const found = appendages[index];
       const part = partsRef.current.find((candidate) => candidate.id === selectedId);
       if (!found || !part) return;
-      const span = part.bounds.size[found.axis]!;
+      const normal = AXIS_NORMALS[(['x', 'y', 'z'] as Axis[])[found.axis]!];
+      const { box } = cutFrame(part, normal);
+      const span = box.n[1] - box.n[0];
       setCutState({
-        axis: (['x', 'y', 'z'] as Axis[])[found.axis]!,
-        position: span > 0 ? Math.min(1, Math.max(0, (found.offset - part.bounds.min[found.axis]!) / span)) : 0.5,
+        normal,
+        position: span > 0 ? Math.min(1, Math.max(0, (found.offset - box.n[0]) / span)) : 0.5,
         window: found.window,
       });
     },
@@ -864,7 +894,7 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
         setCutState((current) => {
           if (!current.window || !id) return current;
           const part = partsRef.current.find((candidate) => candidate.id === id);
-          return part ? { ...current, window: defaultWindow(part, current.axis) } : current;
+          return part ? { ...current, window: defaultWindow(part, current.normal) } : current;
         });
       },
       load,
@@ -909,10 +939,10 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
       setCut: (changes) =>
         setCutState((current) => {
           const next = { ...current, ...changes };
-          // Al cambiar de eje, la ventana vieja hablaba de otros dos ejes.
-          if (changes.axis && changes.axis !== current.axis && next.window) {
+          // Al cambiar de plano, la ventana vieja hablaba de otro marco.
+          if (changes.normal && !sameNormal(changes.normal, current.normal) && next.window) {
             const part = partsRef.current.find((candidate) => candidate.id === selectedId);
-            next.window = part ? defaultWindow(part, next.axis) : null;
+            next.window = part ? defaultWindow(part, next.normal) : null;
           }
           return next;
         }),
@@ -923,21 +953,50 @@ export function MeshProvider({ children }: { children: ReactNode }): ReactNode {
         // manda el punto, no el centro de la pieza.
         setSelectedId(partId);
         setCutState((current) => {
-          const axis = AXIS_INDEX[current.axis];
-          const span = part.bounds.size[axis]!;
-          const [i, j] = crossAxes(current.axis);
+          const { basis, box } = cutFrame(part, current.normal);
+          const span = box.n[1] - box.n[0];
+          const along = point[0] * basis.n[0] + point[1] * basis.n[1] + point[2] * basis.n[2];
           return {
             ...current,
-            position: span > 0 ? Math.min(1, Math.max(0, (point[axis]! - part.bounds.min[axis]!) / span)) : 0.5,
-            window: current.window ? { ...current.window, center: [point[i]!, point[j]!] } : null,
+            position: span > 0 ? Math.min(1, Math.max(0, (along - box.n[0]) / span)) : 0.5,
+            window: current.window ? movedWindow(current.window, toPlane(point, basis)) : null,
           };
         });
       },
+      setCutPlane: (normal, offset, partId) => {
+        const part = partsRef.current.find((candidate) => candidate.id === partId);
+        if (!part) return;
+        setSelectedId(partId);
+        const oriented = orient(normal);
+        const { box } = cutFrame(part, oriented);
+        const span = box.n[1] - box.n[0];
+        // `orient` puede haber dado la vuelta a la normal: el offset la sigue.
+        const signed = oriented[0] === normal[0] && oriented[1] === normal[1] && oriented[2] === normal[2] ? offset : -offset;
+        setCutState((current) => ({
+          normal: oriented,
+          position: span > 0 ? Math.min(1, Math.max(0, (signed - box.n[0]) / span)) : 0.5,
+          window: current.window ? defaultWindow(part, oriented) : null,
+        }));
+      },
+      setCutOutline: (outline) => {
+        if (outline.length < 3) return;
+        setCutState((current) => ({
+          ...current,
+          window: {
+            side: current.window?.side ?? 1,
+            depth: current.window?.depth ?? null,
+            ...outlineBounds(outline),
+            outline,
+          },
+        }));
+      },
+      moveCutWindow: (center) =>
+        setCutState((current) => (current.window ? { ...current, window: movedWindow(current.window, center) } : current)),
       setCutWindow: (on) => {
         const part = partsRef.current.find((candidate) => candidate.id === selectedId);
         setCutState((current) => ({
           ...current,
-          window: on && part ? defaultWindow(part, current.axis) : null,
+          window: on && part ? defaultWindow(part, current.normal) : null,
         }));
       },
       joint,
