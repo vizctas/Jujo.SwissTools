@@ -255,33 +255,37 @@ export function planJoint(
 }
 
 /**
- * Columna de recorte: la caja que, cruzada con la pieza, deja solo lo que el
- * corte debe separar. Nace en el plano y se va hacia +normal más allá de la
- * pieza, así que lo que quede al otro lado no se toca.
+ * Columna de recorte: el sólido que, cruzado con la pieza, deja solo lo que el
+ * corte debe separar. Nace en el plano y crece hacia el lado que se separa.
  *
- * En coordenadas del mundo, con la normal sobre un eje. Quien la use la gira al
- * marco alineado con el mismo `frame` que la pieza, para no derivar a mano a qué
- * eje va a parar cada lado.
+ * Se construye en el marco alineado —el plano es z = offset y (x, y) son
+ * (u, v)—, que es donde `cutOnce` ya tiene la pieza. Con contorno es ese
+ * polígono extruido; sin él, el rectángulo. `null` solo cuando el contorno no
+ * encierra nada (tres puntos en línea): eso no es una columna, y cortar con el
+ * plano entero en su lugar sería justo lo que el recorte quería evitar.
  */
 export function windowColumn(
   wasm: Wasm,
-  normal: Vec3,
   offset: number,
-  window: { center: [number, number]; size: [number, number]; side: 1 | -1 },
+  window: { center: [number, number]; size: [number, number]; side: 1 | -1; outline?: [number, number][] | null },
   reach: number,
 ): M | null {
-  const axis = normal.findIndex((n) => Math.abs(n) > 0.999);
-  if (axis < 0) return null;
-  const others = [0, 1, 2].filter((i) => i !== axis);
-  const size: Vec3 = [0, 0, 0];
-  const center: Vec3 = [0, 0, 0];
-  size[axis] = reach;
-  center[axis] = offset + (window.side * reach) / 2;
-  size[others[0]!] = Math.max(0.01, window.size[0]);
-  size[others[1]!] = Math.max(0.01, window.size[1]);
-  center[others[0]!] = window.center[0];
-  center[others[1]!] = window.center[1];
-  return wasm.Manifold.cube(size, true).translate(center);
+  const { Manifold, CrossSection } = wasm;
+  let column: M;
+  if (window.outline && window.outline.length >= 3) {
+    // Por paridad: un trazo que se cruza a sí mismo sigue encerrando algo.
+    const section = new CrossSection([window.outline], 'EvenOdd');
+    if (section.isEmpty()) {
+      section.delete();
+      return null;
+    }
+    column = Manifold.extrude(section, reach);
+    section.delete();
+  } else {
+    const [w, h] = [Math.max(0.01, window.size[0]), Math.max(0.01, window.size[1])];
+    column = Manifold.cube([w, h, reach], false).translate([window.center[0] - w / 2, window.center[1] - h / 2, 0]);
+  }
+  return column.translate([0, 0, window.side > 0 ? offset : offset - reach]);
 }
 
 /* ------------------------------------------------------------------ Formas */

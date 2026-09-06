@@ -19,9 +19,9 @@ export interface MeshStats {
 }
 
 /**
- * Ventana del corte: el rectángulo, sobre el plano, dentro del cual se corta.
- * Centro y tamaño van en los dos ejes del mundo distintos al del corte, en
- * orden ascendente (corte en Y -> ejes X y Z).
+ * Ventana del corte: lo que, sobre el plano, se separa. Centro y tamaño van en
+ * el marco (u, v) del propio plano, el que da `planeBasis`; así vale igual para
+ * un plano por eje que para uno inclinado.
  */
 export interface CutWindow {
   center: [number, number];
@@ -33,11 +33,16 @@ export interface CutWindow {
    */
   side: 1 | -1;
   /**
-   * Cuánto avanza el corte a lo largo de su propio eje, en mm desde el plano.
+   * Cuánto avanza el corte a lo largo de su propia normal, en mm desde el plano.
    * `null` llega hasta el final de la pieza, que es lo que quiere una extremidad;
    * un número recorta solo ese trozo, que es lo que quiere media pata.
    */
   depth?: number | null;
+  /**
+   * Contorno cerrado en (u, v), dibujado a mano. Con él, la columna es ese
+   * contorno extruido y `center`/`size` son solo su caja; sin él, el rectángulo.
+   */
+  outline?: [number, number][] | null;
 }
 
 /** Plano en el espacio de la pieza: normal unitaria y distancia desde el origen. */
@@ -47,8 +52,7 @@ export interface Plane {
   /**
    * Con ventana, el corte solo alcanza lo que cae dentro de ella: separa un
    * brazo sin tocar lo que haya detrás. Sin ella, el plano es infinito y parte
-   * todo lo que cruza. Solo vale con normales sobre un eje, que son las que
-   * ofrece la herramienta.
+   * todo lo que cruza.
    */
   window?: CutWindow | null;
 }

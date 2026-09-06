@@ -107,7 +107,8 @@ function cutOnce(manifold: ManifoldInstance, plane: Plane, joint: JointSpec | nu
   manifold.delete();
 
   // Con recorte, en vez de partir por un plano infinito se cruza con una columna
-  // que nace en el plano: fuera de ella la pieza no se entera del corte.
+  // que nace en el plano: fuera de ella la pieza no se entera del corte. La
+  // columna ya viene en el marco alineado, el mismo en que está la pieza.
   let column: ManifoldInstance | null = null;
   if (plane.window) {
     const span = Math.max(
@@ -118,10 +119,13 @@ function cutOnce(manifold: ManifoldInstance, plane: Plane, joint: JointSpec | nu
     // Sin profundidad, la columna atraviesa la pieza entera; con ella, se queda
     // en la caja pedida y lo que hay más allá no se toca.
     const reach = plane.window.depth ?? span * 2 + 100;
-    const world = windowColumn(wasm, plane.normal, plane.offset, plane.window, reach);
-    if (world) {
-      column = forward(world);
-      world.delete();
+    column = windowColumn(wasm, plane.offset, plane.window, reach);
+    if (!column) {
+      // Un contorno que no encierra nada: no hay corte, y desde luego no el
+      // plano entero.
+      const restored = back(aligned);
+      aligned.delete();
+      return { pieces: [restored], pins: [], joints: [] };
     }
   }
 

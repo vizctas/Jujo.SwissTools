@@ -18,6 +18,9 @@ const { Manifold } = wasm;
 
 const auto: JointSpec = { mode: 'dowel', shape: 'round', auto: true, diameter: 6, depth: 10, clearance: 0.15, count: 0 };
 
+/** Cubo del mundo llevado al marco alineado de un corte por X. */
+const forwardX = (m: InstanceType<typeof Manifold>): InstanceType<typeof Manifold> => frame([1, 0, 0]).forward(m);
+
 // ---- frame y planeBasis son el mismo marco ----
 {
   // Un cubo desplazado, girado al marco alineado, tiene su centro en (c·u, c·v, c·n).
@@ -195,33 +198,30 @@ const auto: JointSpec = { mode: 'dowel', shape: 'round', auto: true, diameter: 6
   assert.ok(xs[0]! < 30 && xs[1]! > 50, `uno en cada trozo, fueron ${xs.map((x) => x.toFixed(1)).join(' y ')}`);
 }
 
-// ---- corte medido: la ventana separa un brazo sin tocar el ala que hay detrás ----
+// ---- recorte: solo el brazo, sin tocar el ala que cruza el mismo plano ----
 {
-  // Un cuerpo con dos apéndices que cruzan el mismo plano x = 70.
-  const body = Manifold.cube([60, 40, 60], false);
-  const arm = Manifold.cube([40, 12, 12], false).translate([50, 14, 40]);
-  const wing = Manifold.cube([40, 12, 12], false).translate([50, 14, 10]);
+  const body = Manifold.cube([70, 60, 60], false);
+  const arm = Manifold.cube([30, 12, 12], false).translate([70, 14, 40]);
+  const wing = Manifold.cube([30, 12, 12], false).translate([70, 40, 10]);
   const model = body.add(arm).add(wing);
   const total = model.volume();
-
-  // Sin ventana, el plano infinito se lleva los dos apéndices por delante.
   const { forward } = frame([1, 0, 0]);
-  const alignedPlain = forward(model);
-  const [plainAbove] = alignedPlain.splitByPlane([0, 0, 1], 70);
+  const aligned = forward(model);
+
+  const [plainAbove] = aligned.splitByPlane([0, 0, 1], 70);
   assert.equal(plainAbove.decompose().length, 2, 'el plano entero corta brazo y ala');
 
-  // Con ventana sobre el brazo (ejes Y y Z), solo se separa el brazo.
-  const column = windowColumn(wasm, [1, 0, 0], 70, { center: [20, 46], size: [20, 20], side: 1 }, 500);
-  assert.ok(column, 'la columna se construye con normal sobre un eje');
-  const above = model.intersect(column);
-  const below = model.subtract(column);
+  // Con ventana sobre el brazo, en el marco del plano (u = Y, v = Z), solo se separa el brazo.
+  const column = windowColumn(wasm, 70, { center: [20, 46], size: [20, 20], side: 1 }, 500);
+  assert.ok(column, 'la columna rectangular siempre se construye');
+  const above = aligned.intersect(column);
+  const below = aligned.subtract(column);
   assert.ok(Math.abs(above.volume() - 20 * 12 * 12) < 1, `solo el trozo de brazo: ${above.volume().toFixed(0)}`);
   assert.ok(Math.abs(below.volume() - (total - 20 * 12 * 12)) < 1, 'el resto conserva su volumen');
   assert.equal(below.decompose().length, 1, 'lo que queda sigue siendo una sola pieza, con su ala');
 
   // Y la cara de unión es la del brazo: el conector no se planta en el ala.
-  const aligned = forward(model);
-  const limit = forward(column).slice(70.01);
+  const limit = column.slice(70.01);
   const { plan, report } = planJoint(aligned, 70, auto, { above: 20, below: 70 }, limit);
   assert.ok(plan, `debe haber plan: ${report.skipped}`);
   const sectionOfArm = aligned.slice(70.01).intersect(limit);
@@ -234,26 +234,40 @@ const auto: JointSpec = { mode: 'dowel', shape: 'round', auto: true, diameter: 6
 
 // ---- recorte con profundidad: se lleva solo la caja pedida, no el corredor entero ----
 {
-  // Una barra larga: sin profundidad el recorte se lleva todo lo que hay más
-  // allá del plano; con 20 mm, solo esos 20 mm.
-  const bar = Manifold.cube([100, 20, 20], false);
-  const sinFondo = windowColumn(wasm, [1, 0, 0], 30, { center: [10, 10], size: [30, 30], side: 1 }, 500);
-  const conFondo = windowColumn(wasm, [1, 0, 0], 30, { center: [10, 10], size: [30, 30], side: 1 }, 20);
+  const bar = forwardX(Manifold.cube([100, 20, 20], false));
+  const sinFondo = windowColumn(wasm, 30, { center: [10, 10], size: [30, 30], side: 1 }, 500);
+  const conFondo = windowColumn(wasm, 30, { center: [10, 10], size: [30, 30], side: 1 }, 20);
   assert.ok(sinFondo && conFondo);
   assert.ok(Math.abs(bar.intersect(sinFondo).volume() - 70 * 20 * 20) < 1, 'sin profundidad llega al final');
   assert.ok(Math.abs(bar.intersect(conFondo).volume() - 20 * 20 * 20) < 1, 'con profundidad, solo la caja');
   assert.ok(Math.abs(bar.subtract(conFondo).volume() - (100 - 20) * 20 * 20) < 1, 'y el resto queda entero');
   // Hacia el otro lado se lleva el trozo de antes del plano, no el de después.
-  const atras = windowColumn(wasm, [1, 0, 0], 30, { center: [10, 10], size: [30, 30], side: -1 }, 20);
+  const atras = windowColumn(wasm, 30, { center: [10, 10], size: [30, 30], side: -1 }, 20);
   assert.ok(atras);
   assert.ok(Math.abs(bar.intersect(atras).volume() - 20 * 20 * 20) < 1, 'lado negativo: la caja anterior al plano');
   const box = bar.intersect(atras).boundingBox();
-  assert.ok(Math.abs(box.min[0] - 10) < 0.01 && Math.abs(box.max[0] - 30) < 0.01, `x 10..30, fue ${box.min[0]}..${box.max[0]}`);
+  assert.ok(Math.abs(box.min[2] - 10) < 0.01 && Math.abs(box.max[2] - 30) < 0.01, `z 10..30, fue ${box.min[2]}..${box.max[2]}`);
 }
 
-// ---- ventana con normal torcida: no se aplica, y se dice ----
+// ---- recorte con contorno: un triángulo de 10×10 sobre un cubo de 20 ----
 {
-  assert.equal(windowColumn(wasm, [0.7, 0.7, 0], 10, { center: [0, 0], size: [10, 10], side: 1 }, 100), null);
+  const cube = Manifold.cube([20, 20, 20], false);
+  const triangle: [number, number][] = [[0, 0], [10, 0], [0, 10]];
+  const column = windowColumn(wasm, 10, { center: [5, 5], size: [10, 10], side: 1, outline: triangle }, 500);
+  assert.ok(column, 'el contorno se extruye');
+  assert.ok(Math.abs(cube.intersect(column).volume() - 50 * 10) < 0.5, `prisma de 50·10: ${cube.intersect(column).volume()}`);
+  assert.ok(Math.abs(cube.subtract(column).volume() - (8000 - 500)) < 0.5, 'el resto conserva su volumen');
+  // Hacia el otro lado: los 10 mm de debajo del plano.
+  const down = windowColumn(wasm, 10, { center: [5, 5], size: [10, 10], side: -1, outline: triangle }, 500);
+  assert.ok(down);
+  const box = cube.intersect(down).boundingBox();
+  assert.ok(Math.abs(box.min[2]) < 0.01 && Math.abs(box.max[2] - 10) < 0.01, `z 0..10, fue ${box.min[2]}..${box.max[2]}`);
+  // Un contorno autointersecado no revienta: el ocho se resuelve por paridad.
+  const eight: [number, number][] = [[0, 0], [10, 10], [10, 0], [0, 10]];
+  assert.ok(windowColumn(wasm, 10, { center: [5, 5], size: [10, 10], side: 1, outline: eight }, 500), 'el ocho se extruye');
+  // Un contorno degenerado (tres puntos en línea) no es una columna.
+  const flat: [number, number][] = [[0, 0], [5, 0], [10, 0]];
+  assert.equal(windowColumn(wasm, 10, { center: [5, 5], size: [10, 10], side: 1, outline: flat }, 500), null);
 }
 
 console.log('joints self-check ok');
