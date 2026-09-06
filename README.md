@@ -230,11 +230,20 @@ on the model, because "to the end of the piece" and "just this much" look far to
 alike until you can see where the cut stops. The connector is then sized to that
 window rather than to the whole cross-section.
 
-**Three ways to aim it, because dragging a small rectangle is not one of them.**
+**Five ways to aim it, because dragging a small rectangle is not one of them.**
 Type the millimetres, or turn on the crosshair and click the model where the cut
 should go, or press M and then X, Y or Z to slide it along one locked axis with
-the mouse — Enter or a click confirms, Esc puts it back where it was. All three
-drive the same thing: a point on the model and the axis you are cutting along.
+the mouse — Enter or a click confirms, Esc puts it back where it was. Or draw.
+Press C for the knife and drag a line across the model: the cut becomes the plane
+that contains that line as seen from the camera, tilted however you drew it. The
+stroke is straightened to its two ends on purpose — a curved cut face doesn't
+print flat and gives a connector nothing to sit on. Press D with a window active
+and draw a loop around the part you want off: the loop replaces the rectangle,
+and the column that separates the part is that outline extruded along the cut.
+Both compose — tilt with the knife, then draw the region — because the window
+lives in the plane's own frame rather than the world's axes. A plane that no
+longer sits on an axis is reported as "free, N° from Z", and pressing an axis
+button straightens it.
 
 **Connectors sized by the cut, not by the part.** The connector is dimensioned on
 the actual cross-section the plane passes through: its diameter is a fraction of the
