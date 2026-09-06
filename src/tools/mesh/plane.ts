@@ -71,3 +71,47 @@ export function projectBox(min: Vec3, max: Vec3, basis: Basis): { u: Vec2; v: Ve
   };
   return { u: range(basis.u), v: range(basis.v), n: range(basis.n) };
 }
+
+/* ------------------------------------------------------------------ Trazos */
+
+/**
+ * El plano que contiene dos rayos con el mismo origen: el cuchillo. Con cámara
+ * en perspectiva, los dos extremos del trazo son dos rayos desde ella, y el
+ * corte es el plano que pasa por la cámara y por los dos. Un trazo curvo no
+ * cabe aquí a propósito: la cara de corte tiene que ser plana para imprimirse.
+ */
+export function planeFromRays(origin: Vec3, d0: Vec3, d1: Vec3): { normal: Vec3; offset: number } | null {
+  const raw = cross(d0, d1);
+  if (Math.hypot(raw[0], raw[1], raw[2]) < 1e-6) return null;
+  const normal = orient(unit(raw));
+  return { normal, offset: dot(normal, origin) };
+}
+
+/** Quita los puntos a menos de `minDistance` del anterior conservado. El último se queda. */
+export function simplify(points: Vec2[], minDistance: number): Vec2[] {
+  const kept: Vec2[] = [];
+  for (const point of points) {
+    const last = kept[kept.length - 1];
+    if (!last || Math.hypot(point[0] - last[0], point[1] - last[1]) >= minDistance) kept.push(point);
+  }
+  // Donde se soltó importa aunque esté pegado al anterior: cierra el trazo ahí.
+  const end = points[points.length - 1];
+  const tail = kept[kept.length - 1];
+  if (end && tail && (end[0] !== tail[0] || end[1] !== tail[1])) kept.push(end);
+  return kept;
+}
+
+/** Coordenadas (u, v) de un punto de la pieza sobre el plano. */
+export const toPlane = (point: Vec3, basis: Basis): Vec2 => [dot(point, basis.u), dot(point, basis.v)];
+
+/** La caja de un contorno: lo que el gizmo y los sliders enseñan cuando hay contorno. */
+export function outlineBounds(outline: Vec2[]): { center: Vec2; size: Vec2 } {
+  let [minU, minV, maxU, maxV] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const [u, v] of outline) {
+    minU = Math.min(minU, u);
+    minV = Math.min(minV, v);
+    maxU = Math.max(maxU, u);
+    maxV = Math.max(maxV, v);
+  }
+  return { center: [(minU + maxU) / 2, (minV + maxV) / 2], size: [maxU - minU, maxV - minV] };
+}

@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { cross, dot, orient, planeBasis, projectBox, type Vec3 } from './plane.ts';
+import { cross, dot, orient, planeBasis, projectBox, outlineBounds, planeFromRays, simplify, toPlane, type Vec3, type Vec2 } from './plane.ts';
 
 const near = (a: number, b: number, eps = 1e-6): boolean => Math.abs(a - b) < eps;
 const same = (a: Vec3, b: Vec3, eps = 1e-6): boolean => a.every((c, i) => near(c, b[i]!, eps));
@@ -51,6 +51,51 @@ const same = (a: Vec3, b: Vec3, eps = 1e-6): boolean => a.every((c, i) => near(c
   const d = planeBasis([1, 1, 1]);
   const cube = projectBox([0, 0, 0], [1, 1, 1], d);
   assert.ok(near(cube.n[1] - cube.n[0], Math.sqrt(3)), `√3, fue ${cube.n[1] - cube.n[0]}`);
+}
+
+// ---- cuchillo: dos rayos desde la cámara definen el plano que los contiene ----
+{
+  // Cámara delante de la pieza (en −Y mirando a +Y). Una línea horizontal en
+  // pantalla es un plano horizontal: normal Z.
+  const camera: Vec3 = [0, -100, 0];
+  const horizontal = planeFromRays(camera, [-0.3, 1, 0], [0.3, 1, 0]);
+  assert.ok(horizontal, 'hay plano');
+  assert.ok(same(horizontal.normal, [0, 0, 1]), `normal Z, fue ${JSON.stringify(horizontal.normal)}`);
+  assert.ok(near(horizontal.offset, 0), 'pasa por z = 0, la altura de la cámara');
+  // Una línea vertical en pantalla es un plano vertical de perfil: normal X.
+  const vertical = planeFromRays(camera, [0, 1, -0.3], [0, 1, 0.3]);
+  assert.ok(vertical && same(vertical.normal, [1, 0, 0]), `normal X, fue ${JSON.stringify(vertical?.normal)}`);
+  // La normal siempre sale orientada, se dibuje en el sentido que se dibuje.
+  const backwards = planeFromRays(camera, [0.3, 1, 0], [-0.3, 1, 0]);
+  assert.ok(backwards && same(backwards.normal, [0, 0, 1]), 'de derecha a izquierda, la misma normal');
+  // Dos rayos iguales no definen nada.
+  assert.equal(planeFromRays(camera, [0, 1, 0], [0, 1, 0]), null);
+  // Cámara desplazada: el offset es la distancia del plano al origen, no cero.
+  const raised = planeFromRays([0, -100, 40], [-0.3, 1, 0], [0.3, 1, 0]);
+  assert.ok(raised && near(raised.offset, 40), `offset 40, fue ${raised?.offset}`);
+}
+
+// ---- simplificar: puntos demasiado juntos fuera, el último siempre dentro ----
+{
+  const dense: Vec2[] = [[0, 0], [1, 0], [2, 0], [10, 0], [10.5, 0], [11, 0], [20, 0], [20.5, 0]];
+  assert.deepEqual(simplify(dense, 3), [[0, 0], [10, 0], [20, 0], [20.5, 0]]);
+  assert.deepEqual(simplify([[5, 5]], 3), [[5, 5]]);
+  assert.deepEqual(simplify([], 3), []);
+  // Dos puntos iguales se quedan en uno.
+  assert.deepEqual(simplify([[1, 1], [1, 1]], 3), [[1, 1]]);
+}
+
+// ---- al plano: coordenadas (u, v) de un punto ----
+{
+  const basis = planeBasis([1, 0, 0]);
+  assert.deepEqual(toPlane([7, 20, 30], basis), [20, 30]);
+  const z = planeBasis([0, 0, 1]);
+  assert.deepEqual(toPlane([4, 5, 99], z), [4, 5]);
+}
+
+// ---- caja del contorno ----
+{
+  assert.deepEqual(outlineBounds([[0, 0], [10, 0], [0, 6]]), { center: [5, 3], size: [10, 6] });
 }
 
 console.log('plane self-check ok');
