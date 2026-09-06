@@ -469,6 +469,18 @@
   outline: var(--focus-ring);
   outline-offset: 2px;
 }
+.cut-gestures {
+  display: flex;
+  gap: var(--space-1);
+  margin-inline-start: auto;
+}
+.cut-gestures .cut-aim {
+  margin-inline-start: 0;
+}
+.cut-aim:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
 
 /* Un modo activo se anuncia: sin esto, «M» deja el puntero haciendo cosas raras
    sin decir por qué. */

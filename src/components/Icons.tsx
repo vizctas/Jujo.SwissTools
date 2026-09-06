@@ -205,3 +205,17 @@ export const PlugIcon = (props: IconProps): ReactNode => (
     <path d="M8 11.6v2.6" />
   </Icon>
 );
+
+export const KnifeIcon = (props: IconProps): ReactNode => (
+  <Icon {...props}>
+    <path d="M13.5 2.5 3 13" />
+    <path d="M3 13c1.5 0 3-1 3.5-2.5L10 6" />
+  </Icon>
+);
+
+export const PenIcon = (props: IconProps): ReactNode => (
+  <Icon {...props}>
+    <path d="M3 13c2-6 5-9 8-10" />
+    <path d="M11 3l2 2-6.5 6.5L4 12l.5-2.5z" />
+  </Icon>
+);
