@@ -104,7 +104,7 @@ export function findAppendages(wasm: Wasm, solid: M): Appendage[] {
           // Un pelo dentro del apéndice: cortar justo sobre la cara del hombro es
           // el caso ambiguo de una booleana y deja rebabas del cuerpo pegadas.
           const offset = narrow(aligned, min + step * (i - side), min + step * i, neck) + side * Math.max(0.05, step * 0.1);
-          const found = describe(wasm, aligned, back, axis, offset, side * step * 0.4, side);
+          const found = describe(wasm, aligned, back, offset, side * step * 0.4, side);
           if (!found) continue;
           // La sonda solo mide el cuello; se estira hasta la punta para poder
           // reconocer el mismo brazo cuando aparece también en otro eje.
@@ -160,15 +160,15 @@ function narrow(aligned: M, wideAt: number, narrowAt: number, neck: number): num
 }
 
 /**
- * La ventana de un candidato: la caja de lo que hay justo pasado el cuello,
- * traída de vuelta al mundo. Se rota una sonda con el mismo giro en vez de
- * deshacer el cambio de ejes a mano, que es donde se cuelan los errores.
+ * La ventana de un candidato: la caja de la sección justo pasado el cuello, con
+ * margen, en el marco (u, v) del plano. Es el mismo marco en que `windowColumn`
+ * la va a extruir, así que no hay nada que convertir. La caja del mundo se saca
+ * de una sonda girada de vuelta, solo para descartar duplicados entre ejes.
  */
 function describe(
   wasm: Wasm,
   aligned: M,
   back: (m: M) => M,
-  axis: number,
   offset: number,
   delta: number,
   side: 1 | -1,
@@ -182,23 +182,14 @@ function describe(
     if (width <= 0 || height <= 0) return null;
     // Un pelo de margen: la ventana debe envolver la sección, no rozarla.
     const margin = Math.max(0.5, Math.max(width, height) * 0.15);
-    const probe = wasm.Manifold.cube([width + margin * 2, height + margin * 2, 1], true).translate([
-      (flat.min[0] + flat.max[0]) / 2,
-      (flat.min[1] + flat.max[1]) / 2,
-      offset,
-    ]);
+    const center: [number, number] = [(flat.min[0] + flat.max[0]) / 2, (flat.min[1] + flat.max[1]) / 2];
+    const probe = wasm.Manifold.cube([width + margin * 2, height + margin * 2, 1], true).translate([center[0], center[1], offset]);
     const world = back(probe);
     const box = world.boundingBox();
     probe.delete();
     world.delete();
-
-    const rest = [0, 1, 2].filter((i) => i !== axis) as [number, number];
     return {
-      window: {
-        center: [(box.min[rest[0]]! + box.max[rest[0]]!) / 2, (box.min[rest[1]]! + box.max[rest[1]]!) / 2],
-        size: [box.max[rest[0]]! - box.min[rest[0]]!, box.max[rest[1]]! - box.min[rest[1]]!],
-        side,
-      },
+      window: { center, size: [width + margin * 2, height + margin * 2], side },
       box: { min: [...box.min] as [number, number, number], max: [...box.max] as [number, number, number] },
     };
   } finally {

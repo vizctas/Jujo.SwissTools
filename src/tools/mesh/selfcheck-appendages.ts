@@ -37,6 +37,18 @@ const { Manifold } = wasm;
   assert.ok(Math.abs(brazo.area - 144) < 60, `cara de unión ~144 mm², fue ${brazo.area.toFixed(0)}`);
 }
 
+// ---- un brazo por Y: la ventana va en el marco del plano (u = −x, v = z) ----
+{
+  const body = Manifold.cube([60, 40, 60], false);
+  const arm = Manifold.cube([12, 30, 12], false).translate([24, 40, 40]);
+  const found = findAppendages(wasm, body.add(arm));
+  const brazo = found.find((f) => f.axis === 1 && f.side === 1);
+  assert.ok(brazo, `brazo hacia +Y; salió ${JSON.stringify(found.map((f) => [f.axis, f.side]))}`);
+  const [cu, cv] = brazo.window.center;
+  // El brazo va de x 24..36 y z 40..52: u = −x → −30, v = z → 46.
+  assert.ok(Math.abs(cu + 30) < 1.5 && Math.abs(cv - 46) < 1.5, `centro (−30, 46), fue (${cu.toFixed(1)}, ${cv.toFixed(1)})`);
+}
+
 // ---- dos brazos y una cabeza: los tres, sin repetirse entre ejes ----
 {
   const body = Manifold.cube([60, 40, 60], false);
